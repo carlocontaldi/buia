@@ -1,0 +1,14 @@
+# local config and secrets
+.env
+
+# python caches
+__pycache__/
+*.pyc
+
+# models and logs, in case they ever land inside the repo folder
+*.gguf
+*.log
+
+# image/video generation: sd.cpp source is cloned by install.ps1 -Sd; model files are large
+sdcpp/
+sdmodels/

@@ -1,0 +1,95 @@
+services:
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda13   # RTX 50-series (Blackwell) + driver with CUDA 13; use server-cuda for older setups
+    restart: unless-stopped
+    environment:
+      LLAMA_CACHE: /models            # downloaded models live in this named volume
+      HF_TOKEN: ${HF_TOKEN:-}         # only needed for gated Hugging Face repos
+    volumes:
+      - models:/models
+    # Router mode: no -m / -hf here. Models are downloaded, loaded and switched from the web UI.
+    # -ngl is left unset on purpose: llama.cpp's default --fit then offloads only as much as fits in VRAM.
+    # --models-max 1: one model in VRAM at a time. --no-mmproj: text only, skips vision projector files.
+    # NB: no '#' comments inside the command block below, YAML would pass them to llama-server as arguments.
+    command: >-
+      --jinja
+      -c ${CTX_SIZE:-16384}
+      -np 1
+      --flash-attn on
+      -ctk ${KV_CACHE_TYPE:-q8_0} -ctv ${KV_CACHE_TYPE:-q8_0}
+      --models-max 1
+      --no-mmproj
+      --host 0.0.0.0 --port 8080
+      ${LLAMA_EXTRA_ARGS:-}
+    # no "ports:" on purpose: only the agent container can reach llama-server
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  agent:
+    build: ./agent
+    restart: unless-stopped
+    depends_on: [llama]
+    environment:
+      LLAMA_URL: http://llama:8080
+      CTX_SIZE: ${CTX_SIZE:-16384}     # same values as llama-server: the agent trims prompts and sizes KV estimates with them
+      KV_CACHE_TYPE: ${KV_CACHE_TYPE:-q8_0}
+      HF_TOKEN: ${HF_TOKEN:-}
+      GPU_VRAM_MB: ${GPU_VRAM_MB:-}    # optional manual VRAM size if nvidia-smi is not visible in this container
+      MEMORY_FILES: ${MEMORY_FILES:-workspace/BUIA.md}
+      TZ: ${TZ:-UTC}
+      NVIDIA_DRIVER_CAPABILITIES: utility   # only nvidia-smi (to read VRAM for the model fit check), no compute
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "127.0.0.1:8000:8000"         # loopback only; Tailscale Serve exposes it to your tailnet
+    volumes:
+      - type: bind
+        source: ${BUIA_PATH}
+        target: /data/workspace
+      - type: bind
+        source: ${VAULT_PATH}
+        target: /data/vault
+  sd:
+    profiles: ["sd"]
+    build:
+      context: ./sdcpp
+      dockerfile: docker/Dockerfile.cuda
+      args:
+        CUDA_VERSION: "12.8.1"       # Dockerfile default is 12.6.3; Blackwell needs CUDA >= 12.8
+        CUDA_ARCHITECTURES: "120"    # RTX 5050 should be compute capability 12.0: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/bin/sh", "-c"]
+    # SD_ARGS (in .env, one line) holds the model flags. First smoke-test config for Wan 2.1 T2V 1.3B (names from the sd.cpp Wan guide / issue #872):
+    # SD_ARGS=--diffusion-model /models/wan2.1_t2v_1.3B_fp16.safetensors --vae /models/wan_2.1_vae.safetensors --t5xxl /models/umt5-xxl-encoder-Q4_K_S.gguf --diffusion-fa --backend clip=cpu --max-vram cuda0=5 --lora-model-dir /models/loras
+    # --lora-model-dir matters: it defaults to "." and the server scans it recursively on /capabilities AND on every img_gen/vid_gen request.
+    # The container's working dir is /, so the default scan walks /proc and fails with HTTP 500. /models/loras may simply not exist (scan is skipped).
+    # -v makes sd.cpp log the "compute buffer size" lines; tee keeps them in a volume the agent can read later.
+    command: ["/sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_ARGS:-} 2>&1 | tee /logs/sd.log"]
+    volumes:
+      - type: bind
+        source: ./sdmodels   # relative to the folder holding this compose file (buia-stack), next to ./sdcpp
+        target: /models
+        read_only: true
+      - sdlogs:/logs
+    # no "ports:" on purpose: only the agent container should reach sd-server
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+volumes:
+  models:
+  sdlogs:

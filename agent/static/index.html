@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUIA</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --me:#dbeafe; --bot:#f0f0f0; --mute:#777; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --fg:#eee; --me:#1e3a5f; --bot:#262626; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif; }
+  header { display: flex; gap: 6px; align-items: center; padding: 8px 12px 4px; }
+  #msel { flex: 1; min-width: 0; font: inherit; font-size: 14px; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 6px; }
+  #thinkl { display: flex; align-items: center; gap: 4px; font-size: 14px; color: var(--mute); white-space: nowrap; }
+  #status { font-size: 12px; color: var(--mute); padding: 0 12px 6px; border-bottom: 1px solid #8884; }
+  #log { flex: 1; overflow-y: auto; padding: 12px; }
+  .m { max-width: 90%; margin: 8px 0; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .user { background: var(--me); margin-left: auto; }
+  .assistant { background: var(--bot); }
+  details { font-size: 12px; color: var(--mute); margin-bottom: 6px; }
+  pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .media { display: block; max-width: 100%; border-radius: 8px; margin-bottom: 6px; }
+  form { display: flex; gap: 8px; padding: 8px; border-top: 1px solid #8884; }
+  textarea { flex: 1; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; resize: none; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 8px 14px; background: #2563eb; color: #fff; }
+  button.plain { background: none; color: var(--mute); padding: 4px 8px; }
+  #stop { background: #dc2626; }
+  #panel, #mpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
+  h3 { margin: 14px 0 6px; font-size: 14px; }
+  .muted { font-size: 12px; color: var(--mute); margin: 2px 0; }
+  .bad { color: #dc2626; font-size: 12px; }
+  .q { border: 1px solid #8884; border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+  .qh { display: flex; gap: 10px; align-items: center; }
+  .qh .badge { margin-left: auto; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; color: #fff; background: #777; }
+  .badge.fits { background: #16a34a; } .badge.tight { background: #ca8a04; } .badge.offload { background: #ea580c; } .badge.no { background: #dc2626; }
+  .q button { margin-top: 6px; padding: 4px 12px; }
+  .q button:disabled { background: #8886; }
+  #msg { font-size: 12px; color: #dc2626; min-height: 1em; }
+  #repo { width: 100%; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }
+  .chip { display: inline-block; font-size: 12px; margin: 4px 6px 0 0; padding: 2px 8px; border-radius: 99px; background: var(--bot); cursor: pointer; }
+  progress { flex: 0 0 90px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid #8884; }
+  .row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .row small { color: var(--mute); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <button class="plain" id="chats">Chats</button>
+  <select id="msel" title="Model"></select>
+  <label id="thinkl" title="Let the model reason before it answers: slower, uses more context"><input type="checkbox" id="think"> Think</label>
+  <button class="plain" id="models">Models</button>
+  <button class="plain" id="new">New</button>
+</header>
+<div id="status">…</div>
+<div id="panel" hidden></div>
+<div id="mpanel" hidden>
+  <h3>This machine</h3><div id="mhw" class="muted">…</div>
+  <h3>Installed</h3><div id="minst"></div>
+  <h3>Download a model</h3>
+  <input id="repo" placeholder="owner/repo on Hugging Face" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <div id="chips"><span class="muted">Examples:</span></div>
+  <button id="check" style="margin-top:8px">Check quants</button>
+  <div id="msg"></div>
+  <div id="mres"></div>
+</div>
+<div id="log"></div>
+<form id="f">
+  <textarea id="box" rows="2" placeholder="Message (Ctrl+Enter to send)"></textarea>
+  <button id="send">Send</button>
+  <button id="stop" type="button" hidden>Stop</button>
+</form>
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log'), box = $('box'), panel = $('panel');
+let chatId = null, ctl = null;
+const thinkBox = $('think');
+try { thinkBox.checked = localStorage.getItem('buia.think') === '1'; } catch (e) {}  // storage can be blocked: default off
+thinkBox.onchange = () => { try { localStorage.setItem('buia.think', thinkBox.checked ? '1' : '0'); } catch (e) {} };
+
+// Split a buffer into complete SSE events; returns [events, remainder].
+function takeEvents(buf) {
+  const out = []; let i;
+  while ((i = buf.indexOf('\n\n')) >= 0) {
+    const line = buf.slice(0, i).split('\n').find(l => l.startsWith('data:'));
+    buf = buf.slice(i + 2);
+    if (line) out.push(JSON.parse(line.slice(5)));
+  }
+  return [out, buf];
+}
+
+function bubble(role) {
+  const el = document.createElement('div'); el.className = 'm ' + role;
+  const det = document.createElement('details'), sum = document.createElement('summary'), pre = document.createElement('pre');
+  det.hidden = true; det.append(sum, pre);
+  const tdet = document.createElement('details'), tsum = document.createElement('summary'), tpre = document.createElement('pre');
+  tdet.hidden = true; tsum.textContent = 'Thinking'; tdet.append(tsum, tpre);
+  const mdiv = document.createElement('div');
+  const txt = document.createTextNode('');
+  el.append(tdet, det, mdiv, txt); log.append(el);
+  let n = 0;
+  return {
+    set(s) { txt.data = s; },
+    add(s) { const near = log.scrollHeight - log.scrollTop - log.clientHeight < 80; txt.data += s; if (near) log.scrollTop = log.scrollHeight; },
+    think(s) { tdet.hidden = false; tpre.textContent += s; },
+    media(m) {  // note: `el` is the bubble here, so no el() helper
+      const vid = m.mime.startsWith('video/'), n = document.createElement(vid ? 'video' : 'img');
+      n.className = 'media'; n.src = m.url;
+      if (vid) n.controls = n.loop = n.muted = n.autoplay = n.playsInline = true; else n.alt = m.prompt || '';
+      mdiv.append(n); log.scrollTop = log.scrollHeight;
+    },
+    tool(t) {
+      n++; det.hidden = false; sum.textContent = n + ' tool call' + (n > 1 ? 's' : '');
+      const a = typeof t.args === 'string' ? t.args : JSON.stringify(t.args);
+      pre.textContent += (pre.textContent ? '\n' : '') + t.tool + '(' + a + ')\n  -> ' + t.result;
+    },
+  };
+}
+
+function setBusy(b) { $('send').hidden = b; $('stop').hidden = !b; }
+
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) e[k === 'class' ? 'className' : k] = v;
+  e.append(...kids); return e;
+}
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : 'error ' + r.status);
+  return j;
+}
+
+// ---------- models: selector, installed list, hardware check, downloader ----------
+const mpanel = $('mpanel'), msel = $('msel');
+let state = { models: [], selected: null }, hw = null, lastCheck = null, pollTimer = null, hwTick = 0;
+const GB = mb => (mb / 1024).toFixed(1) + ' GB';
+const size = mb => mb >= 1024 ? GB(mb) : Math.round(mb) + ' MB';
+const short = id => id.split('/').slice(1).join('/') || id;
+const usable = m => ['loaded', 'loading', 'unloaded', 'sleeping'].includes(m.status) && !m.failed;
+const LABEL = { fits: 'fits', tight: 'tight', offload: 'CPU offload', no: 'too big', unknown: 'unknown' };
+const EXAMPLES = ['unsloth/Qwen3-4B-Instruct-2507-GGUF', 'ggml-org/gemma-3-4b-it-GGUF', 'unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF'];
+const flash = t => { $('msg').textContent = t || ''; };
+
+async function refreshModels(reload = false) {
+  try {
+    const j = await api('GET', '/api/models' + (reload ? '?reload=1' : ''));
+    state = { models: j.models, selected: j.selected };
+    renderSelect(); renderStatus(); if (!mpanel.hidden) renderInstalled();
+  } catch (e) { $('status').textContent = 'offline'; }
+  schedule();
+}
+function schedule() {
+  clearTimeout(pollTimer);
+  const busy = state.models.some(m => m.status === 'downloading' || m.status === 'loading');
+  if (mpanel.hidden && !busy) return;
+  pollTimer = setTimeout(() => { if (!mpanel.hidden && ++hwTick % 4 === 0) refreshHw(); refreshModels(state.models.some(m => m.status === 'downloading')); }, 1500);
+}
+function renderSelect() {
+  const ms = state.models.filter(usable);
+  msel.textContent = '';
+  if (!ms.length) { msel.append(el('option', { textContent: 'no model installed' })); msel.disabled = true; return; }
+  msel.disabled = false;
+  for (const m of ms) msel.append(el('option', { value: m.id, textContent: (m.status === 'loaded' ? '● ' : '○ ') + short(m.id) }));
+  msel.value = (ms.find(m => m.id === state.selected) || ms.find(m => m.status === 'loaded') || ms[0]).id;
+}
+function renderStatus() {
+  const cur = state.models.find(m => m.id === state.selected) || state.models.find(m => m.status === 'loaded');
+  const dl = state.models.find(m => m.status === 'downloading');
+  let t = !state.models.length ? 'no model yet: open Models to download one' : !cur ? 'no model selected'
+        : cur.status === 'loading' ? 'loading model…' : cur.status === 'loaded' ? 'model ready' : 'model idle (loads on first message)';
+  if (dl) t += ' · downloading ' + short(dl.id) + (dl.total ? ' ' + Math.round(100 * (dl.done || 0) / dl.total) + '%' : '');
+  $('status').textContent = t;
+}
+msel.onchange = async () => {
+  try { await api('POST', '/api/models/select', { id: msel.value }); } catch (e) { $('status').textContent = e.message; }
+  refreshModels();
+};
+
+async function act(method, url, body) {
+  flash('');
+  try { await api(method, url, body); } catch (e) { flash(e.message); }
+  refreshModels(true);
+}
+function renderInstalled() {
+  const box = $('minst'); box.textContent = '';
+  if (!state.models.length) box.append(el('div', { class: 'muted', textContent: 'Nothing installed yet. Download a model below.' }));
+  for (const m of state.models) {
+    const row = el('div', { class: 'row' }, el('span', { textContent: short(m.id), title: m.id }));
+    if (m.status === 'downloading') {
+      row.append(el('progress', m.total ? { max: m.total, value: m.done || 0 } : {}),
+                 el('small', { textContent: m.total ? Math.round(100 * (m.done || 0) / m.total) + '%' : '…' }),
+                 el('button', { class: 'plain', textContent: 'Cancel', onclick: () => act('POST', '/api/models/cancel', { id: m.id }) }));
+    } else if (m.status === 'failed') {
+      row.append(el('small', { class: 'bad', textContent: 'download failed: ' + (m.message || '') }),
+                 el('button', { class: 'plain', textContent: 'Dismiss', onclick: () => act('POST', '/api/models/dismiss', { id: m.id }) }));
+    } else {
+      row.append(el('small', { textContent: m.failed ? 'failed to load' : m.status === 'loading' ? 'loading' + (m.progress != null ? ' ' + Math.round(m.progress * 100) + '%' : '…') : m.status === 'loaded' ? 'loaded' : 'idle' }));
+      row.append(m.id === state.selected ? el('small', { textContent: '✓ in use' })
+                 : el('button', { class: 'plain', textContent: 'Use', onclick: () => act('POST', '/api/models/select', { id: m.id }) }));
+      row.append(el('button', { class: 'plain', textContent: '✕', title: 'Delete from disk',
+                 onclick: () => { if (confirm('Delete ' + m.id + ' from disk?')) act('DELETE', '/api/models?id=' + encodeURIComponent(m.id)); } }));
+    }
+    box.append(row);
+  }
+  if (lastCheck) renderQuants(lastCheck);
+}
+
+async function refreshHw() { try { hw = await api('GET', '/api/hardware'); renderHw(); } catch (e) {} }
+function renderHw() {
+  const b = $('mhw'); b.textContent = '';
+  if (!hw) return;
+  const g = hw.gpu;
+  b.append(el('div', { textContent: g ? `GPU: ${g.name}: ${GB(g.total_mb)} VRAM, ${GB(hw.others_mb)} used by other apps, ${GB(hw.usable_mb)} usable for a model` : 'GPU: not detected (set GPU_VRAM_MB in .env)' }),
+           el('div', { textContent: `RAM: ${GB(hw.ram_avail_mb)} available of ${GB(hw.ram_total_mb)} · Disk: ${GB(hw.disk_free_mb)} free` }));
+}
+
+async function startDownload(repo, q) {
+  let force = false;
+  if (q.verdict === 'no') {
+    if (!confirm(q.id + ' will not fit.\n' + q.reason + '\nDownload anyway?')) return;
+    force = true;
+  }
+  flash('');
+  try { await api('POST', '/api/models/download', { repo, quant: q.tag, force }); } catch (e) { flash(e.message); return; }
+  refreshModels(true);
+}
+function renderQuants(j) {
+  const box = $('mres'); box.textContent = '';
+  const a = j.arch;
+  box.append(el('div', { class: 'muted', textContent: (a ? `${a.arch}, ${a.layers} layers` : 'architecture unreadable: KV cache not included') + ` · estimate for context ${j.ctx}, KV cache ${j.kv_type}` }));
+  if (a && a.swa) box.append(el('div', { class: 'muted', textContent: 'Sliding-window attention: the KV estimate is an upper bound.' }));
+  for (const q of j.quants) {
+    const have = state.models.some(m => m.id.toLowerCase() === q.id.toLowerCase());
+    const need = `needs about ${GB(q.need_mb)}` + (j.hardware.usable_mb != null ? ` of ${GB(j.hardware.usable_mb)} usable` : '') + (q.max_ctx != null ? ` · max context about ${Math.floor(q.max_ctx / 1024)}k` : '');
+    const btn = el('button', { textContent: have ? 'Installed' : !q.disk_ok ? 'Not enough disk' : q.verdict === 'no' ? 'Download anyway' : 'Download', disabled: have || !q.disk_ok, onclick: () => startDownload(j.repo, q) });
+    box.append(el('div', { class: 'q' },
+      el('div', { class: 'qh' }, el('b', { textContent: q.tag }), el('span', { textContent: size(q.size_mb) + (q.shards > 1 ? ` (${q.shards} files)` : '') }),
+         el('span', { class: 'badge ' + q.verdict, textContent: LABEL[q.verdict] })),
+      el('div', { class: 'muted', textContent: need }), el('div', { class: 'muted', textContent: q.reason }), btn));
+  }
+  box.append(el('div', { class: 'muted', textContent: 'Estimate: weights = file size; KV cache and overhead are approximations (about ±15%).' }));
+}
+async function runCheck(repo) {
+  repo = repo.trim(); if (!repo) return;
+  flash(''); $('mres').textContent = 'Checking…';
+  try { lastCheck = await api('GET', '/api/hf/quants?repo=' + encodeURIComponent(repo)); renderQuants(lastCheck); }
+  catch (e) { lastCheck = null; $('mres').textContent = ''; flash(e.message); }
+}
+for (const ex of EXAMPLES) $('chips').append(el('span', { class: 'chip', textContent: ex, onclick: () => { $('repo').value = ex; runCheck(ex); } }));
+$('check').onclick = () => runCheck($('repo').value);
+$('repo').onkeydown = e => { if (e.key === 'Enter') runCheck(e.target.value); };
+$('models').onclick = () => {
+  panel.hidden = true; mpanel.hidden = !mpanel.hidden;
+  if (!mpanel.hidden) { refreshHw(); refreshModels(); renderInstalled(); } else clearTimeout(pollTimer);
+};
+
+async function ask(text) {
+  bubble('user').set(text);
+  const b = bubble('assistant'); b.set('…'); log.scrollTop = log.scrollHeight;
+  let started = false, failed = false, aborted = false, gotText = false;
+  const first = () => { if (!started) { b.set(''); started = true; } };
+  ctl = new AbortController(); setBusy(true);
+  try {
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                         body: JSON.stringify({ chat_id: chatId, message: text, think: thinkBox.checked }), signal: ctl.signal });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      const [events, rest] = takeEvents(buf + dec.decode(value, { stream: true })); buf = rest;
+      for (const ev of events) {
+        if (ev.type === 'chat') { chatId = ev.id; history.replaceState(null, '', '#' + ev.id); }
+        else if (ev.type === 'delta') { first(); gotText = true; b.add(ev.text); }
+        else if (ev.type === 'reasoning') { if (!started) b.set('thinking…'); b.think(ev.text); }
+        else if (ev.type === 'tool') b.tool(ev);
+        else if (ev.type === 'media') { first(); b.media(ev); }
+        else if (ev.type === 'error') { first(); failed = true; b.add('\n[' + ev.message + ']'); }
+      }
+    }
+  } catch (e) {
+    first(); aborted = e.name === 'AbortError'; failed = failed || !aborted;
+    b.add(aborted ? '\n[stopped]' : '\n[error: ' + e.message + ']');
+  } finally {
+    if ((failed || aborted) && !gotText) box.value = text;  // no reply was saved: let the user resend
+    setBusy(false); ctl = null; refreshModels();
+  }
+}
+
+function newChat() { chatId = null; history.replaceState(null, '', location.pathname); log.innerHTML = ''; panel.hidden = true; mpanel.hidden = true; }
+
+async function openChat(id) {
+  const r = await fetch('/api/chats/' + id);
+  if (!r.ok) { newChat(); return; }
+  const c = await r.json();
+  log.innerHTML = ''; chatId = c.id; history.replaceState(null, '', '#' + c.id);
+  for (const m of c.messages) {
+    const b = bubble(m.role); b.set(m.content);
+    if (m.thinking) b.think(m.thinking);
+    (m.trace || []).forEach(t => b.tool(t));
+    (m.media || []).forEach(x => b.media(x));
+  }
+  panel.hidden = true; log.scrollTop = log.scrollHeight;
+}
+
+async function showChats() {
+  mpanel.hidden = true;
+  if (!panel.hidden) { panel.hidden = true; return; }
+  panel.textContent = '';
+  const list = await (await fetch('/api/chats')).json();
+  if (!list.length) panel.textContent = 'No saved chats yet.';
+  for (const c of list) {
+    const row = document.createElement('div'), t = document.createElement('span'), d = document.createElement('small'), x = document.createElement('button');
+    row.className = 'row'; t.textContent = c.title; d.textContent = c.updated.slice(0, 16).replace('T', ' ');
+    x.className = 'plain'; x.textContent = '✕';
+    t.onclick = () => openChat(c.id);
+    x.onclick = async () => { await fetch('/api/chats/' + c.id, { method: 'DELETE' }); if (c.id === chatId) newChat(); row.remove(); };
+    row.append(t, d, x); panel.append(row);
+  }
+  panel.hidden = false;
+}
+
+$('f').onsubmit = e => { e.preventDefault(); const t = box.value.trim(); if (!t || ctl) return; box.value = ''; ask(t); };
+box.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('f').requestSubmit(); };
+$('stop').onclick = () => ctl && ctl.abort();
+$('chats').onclick = showChats;
+$('new').onclick = newChat;
+
+refreshModels();
+if (location.hash.length > 1) openChat(location.hash.slice(1));
+</script>
+</body>
+</html>
