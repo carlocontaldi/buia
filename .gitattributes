@@ -1,0 +1,2 @@
+# Store everything with LF so Windows and the containers agree.
+* text=auto eol=lf
