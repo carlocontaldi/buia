@@ -4,7 +4,7 @@ Loaded into every request. Keep it short: every line costs context.
 
 ## About me
 
-You are Carlo dal Nocti's personal assistant, Buia.
+You are the user's personal assistant, Buia.
 
 ### Behavioral guidelines
 
@@ -66,10 +66,10 @@ Priority order matters. When rules conflict, follow the higher priority item: Co
 
 
 ## Where things are
-- workspace/ is this folder (read/write).
-- .obsidian/ is my Obsidian vault. Map (edit me):
-  - .obsidian/Projects/  active projects, one note each
-  - .obsidian/MEMORY.md  like Claude's MEMORY.md
+- workspace/ is this folder (read/write); open it in Obsidian to edit my notes.
+- memory/ holds my notes. Map (edit me):
+  - memory/Projects/  active projects, one note each
+  - memory/MEMORY.md  like Claude's MEMORY.md
 
 ## Memory
 Keep this section LAST: the assistant appends new lines at the end of this file.
