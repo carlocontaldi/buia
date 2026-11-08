@@ -54,11 +54,30 @@ Rules:
 
 
 # ---------- file tools ----------
+def protected(p: Path) -> bool:
+    """True for everything inside a protected top-level folder of either root:
+    - .obsidian: plugins/ and community-plugins.json there are code that Obsidian runs on your PC;
+    - any clone of this repo, whatever it is called: it holds .env (HF token) and the scripts you run. A clone is recognised by
+      its install.ps1 and docker-compose.yml, so a renamed folder is still covered.
+    A Windows bind mount treats .OBSIDIAN and .obsidian (or BUIA-REPO and buia-repo) as one folder while resolve() does not,
+    hence the case-insensitive name test and the file test, which the mount answers for any spelling."""
+    for r in ROOTS:
+        if p.is_relative_to(r):
+            parts = p.relative_to(r).parts
+            if parts:
+                top = r / parts[0]
+                if parts[0].casefold() == ".obsidian" or ((top / "install.ps1").exists() and (top / "docker-compose.yml").exists()):
+                    return True
+    return False
+
+
 def safe(rel: str) -> Path:
     """Resolve a virtual path; refuse anything outside workspace/ or vault/ (incl. .. and symlinks)."""
     p = (DATA / rel.replace("\\", "/").lstrip("/")).resolve()
     if not any(p == r or p.is_relative_to(r) for r in ROOTS):
         raise ValueError("path must be inside workspace/ or vault/")
+    if protected(p):
+        raise ValueError("that folder is protected (a clone of this repo holds .env and the install scripts, .obsidian/ holds Obsidian plugins)")
     return p
 
 
@@ -104,6 +123,8 @@ def search_files(query: str, path: str = "") -> str:
             parts = f.relative_to(root).parts
             if any(x.startswith(".") for x in parts) or not f.is_file():
                 continue
+            if protected(f):
+                continue
             if all(t in f.stem.lower() for t in terms):
                 hits.append(f"{rel(f)}  (file name match)")
             try:
@@ -136,6 +157,7 @@ def append_file(path: str, content: str) -> str:
 
 
 SD_URL = os.getenv("SD_URL", "http://sd:1234")  # stable-diffusion.cpp server (compose service `sd`, profile sd)
+SD_VIDEO_URL = os.getenv("SD_VIDEO_URL", "http://sd-video:1234")  # sd-server loaded with a video model (compose service sd-video)
 # Measured on the RTX 5050 laptop (8 GB): 512x512, 33 frames, 10 steps took 153 s and peaked at 6.1 GB of VRAM. Raise only after measuring.
 VIDEO_MAX_SIDE, VIDEO_MAX_FRAMES, VIDEO_MAX_STEPS = 512, 33, 20
 IMAGE_MAX_SIDE = 768  # not measured yet: raise only after measuring
@@ -148,22 +170,23 @@ MEDIA_RE = re.compile(r"\d{8}-\d{6}-[a-z0-9-]+\.(?:png|webp|webm)")
 def _sd_job(kind: str, body: dict) -> tuple[str, list]:
     """Run one job on sd-server (kind: img_gen or vid_gen). Returns (text for the model, media entries for the chat UI)."""
     label = "video" if kind == "vid_gen" else "image"
+    base = SD_VIDEO_URL if kind == "vid_gen" else SD_URL
     try:  # check the server before unloading the chat model
-        caps = httpx.get(f"{SD_URL}/sdcpp/v1/capabilities", timeout=5)
+        caps = httpx.get(f"{base}/sdcpp/v1/capabilities", timeout=5)
         caps.raise_for_status()
     except httpx.HTTPError as e:
-        return f"error: {label} server not reachable at {SD_URL} ({type(e).__name__}). Start it with: docker compose --profile sd up -d sd", []
+        return f"error: {label} server not reachable at {base} ({type(e).__name__}). Start it with: docker compose --profile sd up -d", []
     modes = caps.json().get("supported_modes")
     if modes and kind not in modes:  # one model at a time: an image request on a video model (or the reverse) cannot work
         return f"error: the sd server runs a model that does not support {kind} (it supports: {', '.join(modes)}). Change the model in SD_ARGS (.env) and restart the sd service.", []
     asyncio.run(models.unload_all())  # the diffusion model needs the GPU; the router reloads the chat model on the next message
     t0 = time.time()
-    r = httpx.post(f"{SD_URL}/sdcpp/v1/{kind}", json=body, timeout=30)
+    r = httpx.post(f"{base}/sdcpp/v1/{kind}", json=body, timeout=30)
     if r.status_code != 202:
         return f"error: {label} server refused the job: HTTP {r.status_code} {r.text[:200]}", []
     poll_url = r.json()["poll_url"]
     while time.time() - t0 < VIDEO_TIMEOUT:
-        j = httpx.get(SD_URL + poll_url, timeout=30).json()
+        j = httpx.get(base + poll_url, timeout=30).json()
         if j["status"] == "completed":
             res = j["result"]
             if kind == "vid_gen":
