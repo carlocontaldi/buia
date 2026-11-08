@@ -49,7 +49,7 @@ Rules:
 - Before changing an existing file, read it. Prefer append_file over write_file. Do not overwrite a file unless asked.
 - Memory: the files below are loaded on every request. When the user tells you something worth remembering across chats, or asks you to remember something, append one short line to the end of workspace/BUIA.md (its last section is Memory). Only record what the user said, not your own guesses. Never store passwords or secrets.
 - After changing a file, say which file you changed.
-- Images and video: when the user asks for a picture, image or video, call generate_image or generate_video once with a detailed English prompt. The result is shown to the user automatically: answer in one short sentence and never write image links.
+- Images and video: every time the user asks for a picture, image or video, call generate_image or generate_video once with a detailed English prompt, even if you made one earlier in this chat. Never claim you made one unless you called the tool in this reply. The result is shown to the user automatically: answer in one short sentence and never write image links.
 """
 
 
@@ -165,6 +165,7 @@ VIDEO_TIMEOUT = 900  # seconds to wait for one job
 GENERATED = DATA / "workspace" / "generated"  # images and videos made by the tools
 MEDIA_MIME = {"png": "image/png", "webp": "image/webp", "webm": "video/webm"}  # what the chat UI can show
 MEDIA_RE = re.compile(r"\d{8}-\d{6}-[a-z0-9-]+\.(?:png|webp|webm)")
+MEDIA_TOOLS = ("generate_image", "generate_video")  # tools whose result is shown in the chat
 
 
 def _sd_job(kind: str, body: dict) -> tuple[str, list]:
@@ -413,10 +414,29 @@ def sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def history_for_model(chat_msgs: list) -> list:
+    """Chat messages as the model sees them. A turn that made an image or video is replayed with its tool call and result,
+    not just the short reply: with bare replies ("Here is your picture.") in the history, the model copies them and
+    answers the next request without calling the tool, so nothing is generated."""
+    out, n = [], 0
+    for m in chat_msgs:
+        done = [t for t in m.get("trace") or [] if t.get("tool") in MEDIA_TOOLS and str(t.get("result", "")).startswith("saved ")] \
+            if m["role"] == "assistant" else []
+        if done:
+            ids = [f"call_h{n + i}" for i in range(len(done))]
+            n += len(done)
+            out.append({"role": "assistant", "content": None, "tool_calls": [
+                {"id": i, "type": "function", "function": {"name": t["tool"], "arguments": t["args"] if isinstance(t["args"], str) else json.dumps(t["args"])}}
+                for i, t in zip(ids, done)]})
+            out += [{"role": "tool", "tool_call_id": i, "content": t["result"]} for i, t in zip(ids, done)]
+        out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
 async def run(chat: dict, think: bool | None = None):
     """One user turn: stream tokens, run tools, persist the chat. Events are SSE `data:` JSON lines."""
     yield sse({"type": "chat", "id": chat["id"], "title": chat["title"]})
-    history = [{"role": m["role"], "content": m["content"]} for m in chat["messages"]][-MAX_HISTORY:]
+    history = history_for_model(chat["messages"][-MAX_HISTORY:])
     while history and history[0]["role"] != "user":  # some chat templates reject a leading assistant turn
         history.pop(0)
     msgs = [{"role": "system", "content": system_prompt()}] + history
@@ -469,8 +489,8 @@ async def run(chat: dict, think: bool | None = None):
     finally:  # also runs when the client disconnects (Stop button, closed tab)
         if finished:
             reply = text or "(empty reply)"
-        elif text:
-            reply = text + "\n[interrupted]"
+        elif text or media:  # media is already shown to the user and saved on disk: keep it in the chat
+            reply = (text + "\n" if text else "") + "[interrupted]"
         else:
             reply = None
         if reply is None:
