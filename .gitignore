@@ -12,3 +12,10 @@ __pycache__/
 # image/video generation: sd.cpp source is cloned by install.ps1 -Sd; model files are large
 sdcpp/
 sdmodels/
+
+# runtime data BUIA writes when BUIA_PATH is this folder
+/chats/
+/generated/
+/memory/
+/BUIA.md
+/.buia-settings.json
