@@ -53,7 +53,7 @@ if ($Sd) {
     }
     New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
     $compose = @("--profile", "sd")
-    Write-Host "Put the model files named in SD_ARGS (.env) into $PSScriptRoot\sdmodels"
+    Write-Host "Put the model files named in SD_ARGS and SD_VIDEO_ARGS (.env) into $PSScriptRoot\sdmodels"
 }
 
 # 6. Build and start

@@ -1,6 +1,6 @@
 services:
   llama:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda13   # RTX 50-series (Blackwell) + driver with CUDA 13; use server-cuda for older setups
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:222d8eeee19c4407a0ad00eec534dc5d372c706c4c67f58e3993a25ed8ed3d3e   # pinned to the build known to work (2026-11-06); RTX 50-series + CUDA 13 driver. Older driver: use :server-cuda and drop the digest
     restart: unless-stopped
     environment:
       LLAMA_CACHE: /models            # downloaded models live in this named volume
@@ -59,6 +59,8 @@ services:
       - type: bind
         source: ${VAULT_PATH}
         target: /data/vault
+        read_only: true                 # the agent can read the vault but never change it
+
   sd:
     profiles: ["sd"]
     build:
@@ -70,8 +72,8 @@ services:
     restart: unless-stopped
     init: true
     entrypoint: ["/bin/sh", "-c"]
-    # SD_ARGS (in .env, one line) holds the model flags. First smoke-test config for Wan 2.1 T2V 1.3B (names from the sd.cpp Wan guide / issue #872):
-    # SD_ARGS=--diffusion-model /models/wan2.1_t2v_1.3B_fp16.safetensors --vae /models/wan_2.1_vae.safetensors --t5xxl /models/umt5-xxl-encoder-Q4_K_S.gguf --diffusion-fa --backend clip=cpu --max-vram cuda0=5 --lora-model-dir /models/loras
+    # SD_ARGS (in .env, one line) holds the model flags. The working examples (Z-Image Turbo for images, Wan 2.1 T2V 1.3B for video)
+    # live only in .env.example, so they cannot drift from a copy here.
     # --lora-model-dir matters: it defaults to "." and the server scans it recursively on /capabilities AND on every img_gen/vid_gen request.
     # The container's working dir is /, so the default scan walks /proc and fails with HTTP 500. /models/loras may simply not exist (scan is skipped).
     # -v makes sd.cpp log the "compute buffer size" lines; tee keeps them in a volume the agent can read later.
@@ -90,6 +92,15 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # Second sd-server for video: same image, volumes and GPU settings as sd (extends), but its own model flags
+  # (SD_VIDEO_ARGS in .env, one line) and log file. One sd-server loads one model, so images (sd) and video (sd-video)
+  # need separate instances; the agent reaches them as http://sd:1234 and http://sd-video:1234.
+  sd-video:
+    extends:
+      service: sd
+    command: ["/sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_VIDEO_ARGS:-} 2>&1 | tee /logs/sd-video.log"]
+
 volumes:
   models:
   sdlogs:
