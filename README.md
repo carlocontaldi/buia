@@ -33,15 +33,15 @@ Then open http://127.0.0.1:8000, click **Models**, check a Hugging Face repo, do
 
 ```powershell
 cd $HOME\buia\buia-stack
-.\update.ps1               # git pull + rebuild + restart
-.\update.ps1 -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
+.\update.cmd               # git pull + rebuild + restart
+.\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
 ```
 
 ## Phone (Tailscale)
 
-`.\install.ps1 -Tailscale`, or by hand: `tailscale serve --bg 8000`. Open the `https://...ts.net` address from
+`.\install.cmd -Tailscale`, or by hand: `tailscale serve --bg 8000`. Open the `https://...ts.net` address from
 `tailscale serve status` on a phone signed in to the same tailnet. Use `serve`, never `funnel`: the agent has no login
-and can overwrite files.
+and can write notes. Everyone on your tailnet can reach it, so limit that to your own devices in the Tailscale access rules.
 
 ## What lives where
 
@@ -52,7 +52,8 @@ and can overwrite files.
 ## Settings
 
 All settings are in `.env` (see `.env.example` for each one). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
-`MEMORY_FILES` (which `.md` files are loaded on every request; default `BUIA.md`, `memory/*.md`, `memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU).
+`MEMORY_FILES` (which `.md` files are loaded on every request; default `BUIA.md`, `memory/*.md`, `memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
+`ALLOWED_HOSTS` (extra host names for the web UI; see Security).
 
 ## Troubleshooting
 
@@ -62,7 +63,7 @@ All settings are in `.env` (see `.env.example` for each one). Common ones: `CTX_
 
 ## Image and video generation (optional)
 
-`.\install.ps1 -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\`,
+`.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\`,
 and builds the `sd` service from `docker-compose.yml`. The first build compiles it for CUDA and takes a while.
 
 1. Put the model files named in `SD_ARGS` (`.env`) into `sdmodels\`. `.env.example` has a Z-Image Turbo (images) line and a Wan 2.1 (video) line.
@@ -72,4 +73,38 @@ and builds the `sd` service from `docker-compose.yml`. The first build compiles 
    Results are saved in `generated\` inside your workspace folder and shown inline in the chat.
 
 `tools\sd_smoke.py` runs one small video job against the sd server to check it end to end (instructions at the top of the file).
-`.\update.ps1` rebuilds the sd service too once `sdcpp\` exists.
+`.\update.cmd` rebuilds the sd service too once `sdcpp\` exists.
+
+A generation keeps running if you close the page, the phone sleeps or you press Stop; the result is added to the chat when it is done
+(reopen the chat to see it). The chat accepts the next message after that. Stop does not cancel the job itself.
+The sd servers log to Docker (kept to 60 MB each): `docker compose logs sd | findstr /c:"compute buffer"` shows the buffer sizes of the last job.
+
+## Security
+
+The agent has no login; it is meant for `localhost` and your own tailnet. Notes, search results and web pages can contain text that
+tries to give the model orders (prompt injection). The prompt tells the model to treat file text as data, but that is only a request,
+so the limits that matter are in the code:
+
+- The web UI answers only to the host names `localhost`, `127.0.0.1` and `*.ts.net` (plus `ALLOWED_HOSTS` in `.env`), so a web page you visit
+  cannot reach the agent on your PC through DNS rebinding.
+- The file tools write `.md` and `.txt` files only: no scripts, no `.json` (chats, settings), no media. `overwrite` must be a real `true`.
+- Memory files (`MEMORY_FILES`) are loaded into every later prompt, so whatever lands in them acts like a standing instruction. After the model
+  has read any other file in a message, it cannot change them in that message; the user asks again in a new one.
+- At most 3 images or videos per message, and no new message in a chat while its generation is running.
+
+Not covered: if Obsidian has plugins that run code found in notes (Dataview JS, Templater), a note the agent wrote could run when you open it.
+Keep those off for the folders the agent writes to.
+
+## Updating dependencies
+
+`agent/requirements.txt` is a lock file: every package is pinned with hashes and installed with `--require-hashes`, so a rebuild installs exactly
+those files or fails. `agent/requirements.in` lists the direct dependencies. To upgrade on purpose, regenerate the lock inside the same Python image
+the agent runs on (`--upgrade` moves every pin to the newest version; without it pip-compile keeps the existing pins), then rebuild and try the chat, a tool call and an image:
+
+```powershell
+docker run --rm -v "${PWD}/agent:/w" -w /w python:3.12-slim sh -c "pip install -q pip-tools && pip-compile -q --upgrade --generate-hashes --strip-extras requirements.in"
+docker compose up -d --build agent
+```
+
+The base image tag `python:3.12-slim` in `agent/Dockerfile` can still move on a rebuild. To freeze it, run the two commands in the comment at the top of
+the Dockerfile and replace the tag with the printed `python@sha256:...` value (the llama image is already pinned that way).

@@ -41,6 +41,7 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
       GPU_VRAM_MB: ${GPU_VRAM_MB:-}    # optional manual VRAM size if nvidia-smi is not visible in this container
       MEMORY_FILES: ${MEMORY_FILES:-workspace/BUIA.md}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}   # extra host names the web UI may be opened under (localhost, 127.0.0.1 and *.ts.net always work)
       TZ: ${TZ:-UTC}
       NVIDIA_DRIVER_CAPABILITIES: utility   # only nvidia-smi (to read VRAM for the model fit check), no compute
     deploy:
@@ -76,15 +77,20 @@ services:
     # live only in .env.example, so they cannot drift from a copy here.
     # --lora-model-dir matters: it defaults to "." and the server scans it recursively on /capabilities AND on every img_gen/vid_gen request.
     # The container's working dir is /, so the default scan walks /proc and fails with HTTP 500. /models/loras may simply not exist (scan is skipped).
-    # -v makes sd.cpp log the "compute buffer size" lines; tee keeps them in a volume the agent can read later.
-    command: ["/sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_ARGS:-} 2>&1 | tee /logs/sd.log"]
+    # -v makes sd.cpp log the "compute buffer size" lines. Read them with: docker compose logs sd | findstr /c:"compute buffer"
+    # exec: sd-server replaces the shell, so docker stop reaches it and ends it cleanly.
+    command: ["exec /sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_ARGS:-}"]
     volumes:
       - type: bind
         source: ./sdmodels   # relative to the folder holding this compose file (buia-stack), next to ./sdcpp
         target: /models
         read_only: true
-      - sdlogs:/logs
     # no "ports:" on purpose: only the agent container should reach sd-server
+    logging:                         # -v is chatty: keep the newest 60 MB, not everything forever
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     deploy:
       resources:
         reservations:
@@ -94,13 +100,12 @@ services:
               capabilities: [gpu]
 
   # Second sd-server for video: same image, volumes and GPU settings as sd (extends), but its own model flags
-  # (SD_VIDEO_ARGS in .env, one line) and log file. One sd-server loads one model, so images (sd) and video (sd-video)
+  # (SD_VIDEO_ARGS in .env, one line). One sd-server loads one model, so images (sd) and video (sd-video)
   # need separate instances; the agent reaches them as http://sd:1234 and http://sd-video:1234.
   sd-video:
     extends:
       service: sd
-    command: ["/sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_VIDEO_ARGS:-} 2>&1 | tee /logs/sd-video.log"]
+    command: ["exec /sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_VIDEO_ARGS:-}"]
 
 volumes:
   models:
-  sdlogs:
