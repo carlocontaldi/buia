@@ -1,4 +1,4 @@
-# Updates BUIA from the repo. Run from this folder:  .\update.ps1
+# Updates BUIA from the repo. Run from this folder:  .\update.cmd   (it calls this script with the execution policy bypassed, like install.cmd)
 # Add -Llama to also look at the newest llama.cpp server image. docker-compose.yml pins the image by digest (a known working build),
 # so this only shows what the moving tag points to now. To adopt it, paste its digest into docker-compose.yml and run this script again.
 param([switch]$Llama)

@@ -287,6 +287,32 @@ async function ask(text) {
   } finally {
     if ((failed || aborted) && !gotText) box.value = text;  // no reply was saved: let the user resend
     setBusy(false); ctl = null; refreshModels();
+    if ((failed || aborted) && chatId) resync(chatId, text);
+  }
+}
+
+// A generation job keeps running on the server when the page is closed, the phone sleeps or Stop is pressed, and its result is added
+// to the chat when it ends. After a lost connection, check for such a job and show the chat the way the server has it.
+async function resync(id, text) {
+  for (let i = 0; i < 4 && chatId === id; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    if (ctl) return;  // the user already started something else
+    const r = await fetch('/api/chats/' + id).catch(() => null);
+    if (!r || !r.ok) continue;
+    if ((await r.json()).messages.some(m => m.pending)) { if (box.value === text) box.value = ''; await openChat(id); return; }
+  }
+}
+
+let watching = null;  // chat id being polled for a running generation job
+async function watchPending(id) {
+  if (watching === id) return;
+  watching = id;
+  for (;;) {
+    await new Promise(r => setTimeout(r, 3000));
+    if (chatId !== id) { if (watching === id) watching = null; return; }
+    const r = await fetch('/api/chats/' + id).catch(() => null);
+    if (r && r.status === 404) { watching = null; return; }
+    if (r && r.ok && !(await r.json()).messages.some(m => m.pending)) { watching = null; await openChat(id); return; }
   }
 }
 
@@ -298,12 +324,14 @@ async function openChat(id) {
   const c = await r.json();
   log.innerHTML = ''; chatId = c.id; history.replaceState(null, '', '#' + c.id);
   for (const m of c.messages) {
-    const b = bubble(m.role); b.set(m.content);
+    const b = bubble(m.role);
+    b.set(m.pending ? (m.content ? m.content + '\n' : '') + '⏳ generating the ' + (m.pending.tool === 'generate_video' ? 'video' : 'image') + '… it will appear here when it is done' : m.content);
     if (m.thinking) b.think(m.thinking);
     (m.trace || []).forEach(t => b.tool(t));
     (m.media || []).forEach(x => b.media(x));
   }
   panel.hidden = true; log.scrollTop = log.scrollHeight;
+  if (c.messages.some(m => m.pending)) watchPending(c.id);
 }
 
 async function showChats() {
