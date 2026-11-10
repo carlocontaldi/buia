@@ -63,6 +63,12 @@ Rules:
 
 
 # ---------- file tools ----------
+# Names that Windows reads as something other than they say: 8.3 short names (OBSIDI~1), a trailing dot or space ("memory." is "memory"),
+# NTFS streams (name:stream) and device names (NUL, COM1). A Windows bind mount resolves them to the real file, but protected() and
+# is_memory_file() compare spellings, so such a spelling could slip past them. No note needs a name like that, so they are refused.
+WINDOWS_ALIASES = re.compile(r'[<>:"|?*]|[. ]$|~\d+(\.|$)|^(con|prn|aux|nul|com\d|lpt\d|conin\$|conout\$)(\.|$)', re.I)
+
+
 def protected(p: Path) -> bool:
     """True for everything inside a protected top-level folder of either root:
     - .obsidian: plugins/ and community-plugins.json there are code that Obsidian runs on your PC;
@@ -85,6 +91,11 @@ def safe(rel: str) -> Path:
     p = (DATA / rel.replace("\\", "/").lstrip("/")).resolve()
     if not any(p == r or p.is_relative_to(r) for r in ROOTS):
         raise ValueError("path must be inside workspace/ or vault/")
+    for r in ROOTS:
+        if p.is_relative_to(r):
+            for part in p.relative_to(r).parts:
+                if WINDOWS_ALIASES.search(part):
+                    raise ValueError(f"{part!r} is not a usable name here (Windows would treat it as a different file or folder)")
     if protected(p):
         raise ValueError("that folder is protected (a clone of this repo holds .env and the install scripts, .obsidian/ holds Obsidian plugins)")
     return p
@@ -111,11 +122,19 @@ def read_file(path: str, offset: int = 0) -> str:
     p = safe(path)
     if not p.is_file():
         return "error: not a file"
-    text = p.read_text(encoding="utf-8", errors="replace")
-    end = offset + TOOL_OUT_MAX - 200  # leave room for the footer
-    chunk = text[offset:end]
-    if end < len(text):
-        chunk += f"\n[chars {offset}-{end} of {len(text)}; call read_file again with offset={end} for more]"
+    size = TOOL_OUT_MAX - 200  # leave room for the footer
+    offset = max(0, offset)
+    with p.open(encoding="utf-8", errors="replace") as f:
+        left = offset
+        while left > 0:  # skip in blocks: a big file or a huge offset must cost time, never memory
+            got = len(f.read(min(left, 1 << 20)))
+            if not got:
+                return ""
+            left -= got
+        chunk = f.read(size + 1)
+    if len(chunk) > size:
+        end = offset + size
+        return chunk[:size] + f"\n[chars {offset}-{end} of a {p.stat().st_size:,}-byte file; call read_file again with offset={end} for more]"
     return chunk
 
 
