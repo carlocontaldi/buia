@@ -27,7 +27,8 @@ Keep the clone directly inside your buia folder (any name): it sits in the folde
 file tools refuse it (they recognise it by `install.ps1` and `docker-compose.yml`) because it holds `.env` and the scripts you run.
 They also refuse `.obsidian/` (plugins there are code Obsidian runs), and the `vault/` mount is read-only. The agent's notes live in `memory/`.
 
-Then open http://127.0.0.1:8000, click **Models**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
+Then open http://127.0.0.1:8000 and log in with the password the installer printed (it is saved in `.env` as `BUIA_PASSWORD`; edit it there and run
+`docker compose up -d` to change it). Click **Models**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
 
 ## Update
 
@@ -37,23 +38,26 @@ cd $HOME\buia\buia-stack
 .\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
 ```
 
+The first update that brings the login adds a random `BUIA_PASSWORD` to your `.env` and prints it. If the login page says `BUIA_PASSWORD` is not set,
+you updated with an older `update.ps1`: run `.\update.cmd` once more.
+
 ## Phone (Tailscale)
 
 `.\install.cmd -Tailscale`, or by hand: `tailscale serve --bg 8000`. Open the `https://...ts.net` address from
-`tailscale serve status` on a phone signed in to the same tailnet. Use `serve`, never `funnel`: the agent has no login
-and can write notes. Everyone on your tailnet can reach it, so limit that to your own devices in the Tailscale access rules.
+`tailscale serve status` on a phone signed in to the same tailnet. Use `serve`, never `funnel`: the agent
+is protected by one shared password only, and it can write notes. Everyone on your tailnet can reach the login page, so limit that to your own devices in the Tailscale access rules.
 
 ## What lives where
 
 | In the repo | Outside the repo (never committed) |
 |---|---|
-| `agent/` code and web UI, `docker-compose.yml`, scripts, `templates/BUIA.md` | `.env` (paths, token), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
+| `agent/` code and web UI, `docker-compose.yml`, scripts, `templates/BUIA.md` | `.env` (paths, token, password), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
 
 ## Settings
 
 All settings are in `.env` (see `.env.example` for each one). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
 `MEMORY_FILES` (which `.md` files are loaded on every request; default `BUIA.md`, `memory/*.md`, `memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
-`ALLOWED_HOSTS` (extra host names for the web UI; see Security).
+`ALLOWED_HOSTS` (extra host names for the web UI; see Security), `BUIA_PASSWORD` (the web UI password).
 
 ## Troubleshooting
 
@@ -66,9 +70,14 @@ All settings are in `.env` (see `.env.example` for each one). Common ones: `CTX_
 `.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\`,
 and builds the `sd` service from `docker-compose.yml`. The first build compiles it for CUDA and takes a while.
 
-1. Put the model files named in `SD_ARGS` (`.env`) into `sdmodels\`. `.env.example` has a Z-Image Turbo (images) line and a Wan 2.1 (video) line.
-2. `docker compose --profile sd up -d` after changing `SD_ARGS`. The sd server runs one model at a time: an image model
-   cannot make videos and the other way round.
+1. Open **Models**, scroll to **Image and video models**, click **Download** on a preset (Z-Image Turbo for images, Wan 2.1 T2V 1.3B for video),
+   then **Use**. Downloads come from Hugging Face into `sdmodels\`, resume after a cancel or a dropped connection, and are checked against
+   their sha256. **Use** makes the sd server restart with that model a few seconds later (`sd-run.sh` watches `sdmodels\active-image.args`
+   and `active-video.args`). There is no fit check for these yet; the video preset was measured at 512x512 with 33 frames on 8 GB.
+   Only these presets can be downloaded: each model family needs its own set of files and flags.
+   (Doing it by hand still works: put the files into `sdmodels\`, set `SD_ARGS` / `SD_VIDEO_ARGS` in `.env` as in `.env.example`, then
+   `docker compose --profile sd up -d`. They apply while no model has been chosen with Use.)
+2. The sd server runs one model at a time: an image model cannot make videos and the other way round, which is why there are two servers.
 3. Ask the assistant for an image or a video. Before each job the chat model is unloaded to free VRAM and loads again on your next message.
    Results are saved in `generated\` inside your workspace folder and shown inline in the chat.
 
@@ -81,7 +90,9 @@ Every service keeps only its newest 60 MB of Docker logs (3 files of 20 MB). `do
 
 ## Security
 
-The agent has no login; it is meant for `localhost` and your own tailnet. Notes, search results and web pages can contain text that
+The web UI is protected by one password (`BUIA_PASSWORD` in `.env`): every API call except the login and the health check needs the session cookie that a login sets (HttpOnly, `SameSite=Strict`,
+valid 30 days, signed with a key derived from the password, so changing the password logs everyone out). Five wrong passwords in a row lock the login for a minute.
+Without a password nobody can log in. It is meant for `localhost` and your own tailnet, not for the open internet. Notes, search results and web pages can contain text that
 tries to give the model orders (prompt injection). The prompt tells the model to treat file text as data, but that is only a request,
 so the limits that matter are in the code:
 
@@ -92,7 +103,7 @@ so the limits that matter are in the code:
 - The file tools write `.md` and `.txt` files only: no scripts, no `.json` (chats, settings), no media. `overwrite` must be a real `true`.
 - Memory files (`MEMORY_FILES`) are loaded into every later prompt, so whatever lands in them acts like a standing instruction. After the model
   has read any other file in a message, it cannot change them in that message; the user asks again in a new one.
-- At most 3 images or videos per message, and no new message in a chat while its generation is running.
+- No new message in a chat while its generation is running. There is no limit on how many images or videos one message can ask for; only `MAX_STEPS` (8 tool rounds per message) stops a runaway loop, and Stop does not cancel a job that already started.
 
 Not covered: if Obsidian has plugins that run code found in notes (Dataview JS, Templater), a note the agent wrote could run when you open it.
 Keep those off for the folders the agent writes to.

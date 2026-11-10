@@ -6,6 +6,6 @@ WORKDIR /app
 COPY requirements.txt .
 # requirements.txt is a lock file (every package pinned, with hashes): pip refuses anything that differs. Change it with README > Updating dependencies.
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
-COPY agent.py models.py ./
+COPY agent.py auth.py models.py sdmodels.py ./
 COPY static ./static
 CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -11,6 +11,12 @@ function Check($what) {
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" }
 }
 
+function New-Password {   # 32 hex characters from the OS random number generator (hex: no $ or # for Compose to trip over)
+    $b = New-Object byte[] 16
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+    -join ($b | ForEach-Object { $_.ToString('x2') })
+}
+
 # 1. Docker must be running
 docker info *> $null
 Check "Docker (is Docker Desktop running?)"
@@ -30,6 +36,16 @@ if (-not (Test-Path .env)) {
         -replace '^VAULT_PATH=.*', "VAULT_PATH=$parent/.obsidian" |
         Set-Content .env -Encoding ascii
     Write-Host "Created .env with BUIA_PATH=$parent"
+}
+
+# 3b. Web UI password: a random one the first time (fresh .env, or an .env from before the login existed), never overwritten
+$envLines = @(Get-Content .env)
+if (-not ($envLines -match '^BUIA_PASSWORD=')) {
+    $pw = New-Password
+    Add-Content .env "`nBUIA_PASSWORD=$pw" -Encoding ascii
+    Write-Host "Web UI password: $pw   (saved in .env as BUIA_PASSWORD; change it there)"
+} elseif (-not ($envLines -match '^BUIA_PASSWORD=.+')) {
+    Write-Warning "BUIA_PASSWORD in .env is empty, so nobody can log in. Put a password after the = and run this again."
 }
 
 # 4. Folders and memory file the containers mount
@@ -53,7 +69,7 @@ if ($Sd) {
     }
     New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
     $compose = @("--profile", "sd")
-    Write-Host "Put the model files named in SD_ARGS and SD_VIDEO_ARGS (.env) into $PSScriptRoot\sdmodels"
+    Write-Host "Download an image and a video model in the web UI (Models > Image and video models), or put the files named in SD_ARGS / SD_VIDEO_ARGS (.env) into $PSScriptRoot\sdmodels"
 }
 
 # 6. Build and start
