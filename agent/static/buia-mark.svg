@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+<title id="title">BUIA cat mark</title>
+<defs>
+  <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#8cffb4"/><stop offset=".52" stop-color="#35dc79"/><stop offset="1" stop-color="#168c4b"/></linearGradient>
+  <radialGradient id="glow"><stop stop-color="#1d8b4b" stop-opacity=".42"/><stop offset="1" stop-color="#07100c" stop-opacity="0"/></radialGradient>
+  <linearGradient id="fur" x1=".1" y1="0" x2=".9" y2="1"><stop stop-color="#f4fff6"/><stop offset="1" stop-color="#a9cdb4"/></linearGradient>
+  <filter id="soft"><feGaussianBlur stdDeviation="13"/></filter>
+</defs>
+<rect x="18" y="18" width="476" height="476" rx="142" fill="#07120c"/>
+<circle cx="256" cy="248" r="218" fill="url(#glow)"/>
+<rect x="20" y="20" width="472" height="472" rx="140" fill="none" stroke="url(#edge)" stroke-width="5"/>
+<path d="M98 310 C116 272 125 230 146 185 L170 112 Q177 91 195 108 L237 151 Q256 143 276 151 L320 106 Q338 91 346 115 L365 190 C390 218 405 260 402 302 C399 373 344 417 263 420 C184 423 124 386 98 310Z" fill="url(#fur)"/>
+<path d="M151 247 Q174 269 201 250" fill="none" stroke="#07120c" stroke-width="12" stroke-linecap="round"/>
+<path d="M270 250 Q297 270 321 246" fill="none" stroke="#07120c" stroke-width="12" stroke-linecap="round"/>
+<path d="M224 296 Q245 309 263 296 Q281 309 300 295" fill="none" stroke="#07120c" stroke-width="10" stroke-linecap="round"/>
+<path d="M248 311 Q256 318 265 311" fill="none" stroke="#07120c" stroke-width="8" stroke-linecap="round"/>
+<path d="M64 356 C154 455 353 453 448 332" fill="none" stroke="#48e989" stroke-width="15" stroke-linecap="round" opacity=".88"/>
+<path d="M64 356 C154 455 353 453 448 332" fill="none" stroke="#a4ffc2" stroke-width="4" stroke-linecap="round" opacity=".9"/>
+</svg>
