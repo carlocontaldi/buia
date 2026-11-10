@@ -18,9 +18,11 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import auth
 import httpx
 import models
-from fastapi import FastAPI, HTTPException
+import sdmodels
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -34,7 +36,6 @@ MEMORY_MAX_CHARS = int(os.getenv("MEMORY_MAX_CHARS", "12000"))  # ~3k tokens of 
 MAX_STEPS = int(os.getenv("MAX_STEPS", "8"))  # tool-call rounds per user message
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))  # chat messages kept per request
 TOOL_OUT_MAX = 8000  # chars returned to the model per tool call
-MAX_MEDIA_JOBS = 3  # images/videos per user message: a hostile note could otherwise queue minutes of GPU work per tool call
 WRITE_SUFFIXES = (".md", ".txt")  # the file tools write notes only: no scripts, no .json app state (chats/, .buia-settings.json), no media
 # Host names the web UI answers to. Anything else is refused, so a web page cannot reach the agent through DNS rebinding.
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "*.ts.net"] + [h.strip() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -536,7 +537,7 @@ async def run(chat: dict, think: bool | None = None):
     msgs = [{"role": "system", "content": system_prompt()}] + history
     text, thought, trace, media, finished = "", "", [], [], False
     job = None  # (id, tool, args, task) of a generation job that is running right now
-    media_jobs, tainted = 0, False
+    tainted = False
     try:
         for _ in range(MAX_STEPS):
             fit_context(msgs)
@@ -567,10 +568,7 @@ async def run(chat: dict, think: bool | None = None):
             msgs.append(msg)
             for c in msg["tool_calls"]:
                 name, args = c["function"]["name"], c["function"]["arguments"]
-                media_jobs += name in MEDIA_TOOLS
-                if name in MEDIA_TOOLS and media_jobs > MAX_MEDIA_JOBS:
-                    out, new_media = f"error: at most {MAX_MEDIA_JOBS} images or videos per message", []
-                elif name in MEDIA_TOOLS:
+                if name in MEDIA_TOOLS:
                     # A generation takes minutes and a phone goes to sleep or a tab closes in that time. The job is its own task,
                     # shielded from this request: if the client leaves, the job keeps running and finish_job() attaches the result.
                     task = asyncio.create_task(asyncio.to_thread(call_tool, name, args))
@@ -619,9 +617,11 @@ async def run(chat: dict, think: bool | None = None):
 
 
 # ---------- API ----------
-app = FastAPI(lifespan=models.lifespan)
+app = FastAPI(lifespan=models.lifespan, dependencies=[Depends(auth.require_login)])  # every API route needs a session (auth.OPEN excepted)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+app.include_router(auth.router)
 app.include_router(models.router)
+app.include_router(sdmodels.router)
 
 
 class Ask(BaseModel):

@@ -44,10 +44,18 @@
   .row { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid #8884; }
   .row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .row small { color: var(--mute); }
+  #login { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; background: var(--bg); }
+  #pw { width: min(320px, 100%); font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
+<form id="login" hidden>
+  <b>BUIA</b>
+  <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
+  <button>Log in</button>
+  <div id="lmsg" class="bad"></div>
+</form>
 <header>
   <button class="plain" id="chats">Chats</button>
   <select id="msel" title="Model"></select>
@@ -66,6 +74,10 @@
   <button id="check" style="margin-top:8px">Check quants</button>
   <div id="msg"></div>
   <div id="mres"></div>
+  <h3>Image and video models</h3>
+  <div id="sdinfo" class="muted"></div>
+  <div id="sdmsg" class="bad"></div>
+  <div id="sdlist"></div>
 </div>
 <div id="log"></div>
 <form id="f">
@@ -77,6 +89,17 @@
 const $ = id => document.getElementById(id);
 const log = $('log'), box = $('box'), panel = $('panel');
 let chatId = null, ctl = null;
+
+// Any 401 from the server means there is no valid session (never logged in, or the cookie expired): show the login form.
+const rawFetch = window.fetch.bind(window);
+window.fetch = async (...a) => { const r = await rawFetch(...a); if (r.status === 401) showLogin(); return r; };
+function showLogin() { $('login').hidden = false; $('pw').focus(); }
+$('login').onsubmit = async e => {
+  e.preventDefault();
+  const r = await rawFetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('pw').value }) }).catch(() => null);
+  if (r && r.ok) { $('pw').value = ''; $('lmsg').textContent = ''; $('login').hidden = true; boot(); return; }
+  $('lmsg').textContent = r ? (await r.json().catch(() => ({}))).detail || 'error ' + r.status : 'cannot reach the server';
+};
 const thinkBox = $('think');
 try { thinkBox.checked = localStorage.getItem('buia.think') === '1'; } catch (e) {}  // storage can be blocked: default off
 thinkBox.onchange = () => { try { localStorage.setItem('buia.think', thinkBox.checked ? '1' : '0'); } catch (e) {} };
@@ -209,6 +232,54 @@ function renderInstalled() {
   if (lastCheck) renderQuants(lastCheck);
 }
 
+// ---------- image and video models: presets downloaded into sdmodels/ and switched with Use (agent/sdmodels.py) ----------
+let sd = null, sdTimer = null;
+async function refreshSd() {
+  clearTimeout(sdTimer);
+  try { sd = await api('GET', '/api/sd/models'); renderSd(); } catch (e) { $('sdinfo').textContent = 'could not load: ' + e.message; return; }
+  if (!mpanel.hidden && sd.models.some(m => m.state === 'downloading')) sdTimer = setTimeout(refreshSd, 1500);
+}
+async function sdAct(method, url, body) {
+  $('sdmsg').textContent = '';
+  try { await api(method, url, body); } catch (e) { $('sdmsg').textContent = e.message; }
+  refreshSd();
+}
+function renderSd() {
+  const run = k => k + ' server: ' + (sd.servers[k].up ? 'running ' + (sd.servers[k].model || 'with no model') : 'not running');
+  $('sdinfo').textContent = run('image') + ' · ' + run('video') + ' · ' + size(sd.disk_free_mb) + ' free. A server restarts a few seconds after you click Use.'
+    + (sd.servers.image.up || sd.servers.video.up ? '' : ' Generation is installed with .\\install.cmd -Sd.');
+  const box = $('sdlist'); box.textContent = '';
+  for (const m of sd.models) {
+    const q = el('div', { class: 'q' }, el('div', { class: 'qh' }, el('b', { textContent: m.name }),
+      el('small', { textContent: m.size_mb ? size(m.size_mb) : '' }), el('span', { class: 'badge', textContent: m.kind })));
+    q.append(el('div', { class: 'muted', textContent: m.note }),
+             el('div', { class: 'muted', textContent: m.files.map(f => (f.have ? '✓ ' : '· ') + f.name).join('   ') }));
+    const row = el('div', { class: 'row' });
+    if (m.state === 'downloading') {
+      row.append(el('progress', m.total ? { max: m.total, value: m.done } : {}),
+                 el('small', { textContent: m.total ? Math.round(100 * m.done / m.total) + '%' : '…' }),
+                 el('button', { class: 'plain', textContent: 'Cancel', onclick: () => sdAct('POST', '/api/sd/cancel', { id: m.id }) }));
+    } else {
+      if (m.state === 'failed') row.append(el('small', { class: 'bad', textContent: 'download failed: ' + (m.message || '') }));
+      if (m.ready) {
+        row.append(m.active ? el('small', { textContent: '✓ in use' })
+                            : el('button', { class: 'plain', textContent: 'Use', onclick: () => sdAct('POST', '/api/sd/use', { id: m.id }) }));
+        row.append(el('button', { class: 'plain', textContent: '✕', title: 'Delete from disk',
+                   onclick: () => { if (confirm('Delete ' + m.name + ' from disk?')) sdAct('DELETE', '/api/sd/models?id=' + encodeURIComponent(m.id)); } }));
+      } else {
+        const some = m.files.some(f => f.have);
+        const b = el('button', { class: 'plain', textContent: m.state === 'failed' ? 'Retry' : some ? 'Continue download' : 'Download',
+                                 onclick: () => sdAct('POST', '/api/sd/download', { id: m.id }) });
+        b.disabled = !m.disk_ok;
+        row.append(b);
+        if (!m.disk_ok) row.append(el('small', { class: 'bad', textContent: 'not enough free disk space' }));
+        if (m.state === 'failed') row.append(el('button', { class: 'plain', textContent: 'Dismiss', onclick: () => sdAct('POST', '/api/sd/cancel', { id: m.id }) }));
+      }
+    }
+    q.append(row); box.append(q);
+  }
+}
+
 async function refreshHw() { try { hw = await api('GET', '/api/hardware'); renderHw(); } catch (e) {} }
 function renderHw() {
   const b = $('mhw'); b.textContent = '';
@@ -255,7 +326,7 @@ $('check').onclick = () => runCheck($('repo').value);
 $('repo').onkeydown = e => { if (e.key === 'Enter') runCheck(e.target.value); };
 $('models').onclick = () => {
   panel.hidden = true; mpanel.hidden = !mpanel.hidden;
-  if (!mpanel.hidden) { refreshHw(); refreshModels(); renderInstalled(); } else clearTimeout(pollTimer);
+  if (!mpanel.hidden) { refreshHw(); refreshModels(); renderInstalled(); refreshSd(); } else { clearTimeout(pollTimer); clearTimeout(sdTimer); }
 };
 
 async function ask(text) {
@@ -348,6 +419,7 @@ async function showChats() {
     x.onclick = async () => { await fetch('/api/chats/' + c.id, { method: 'DELETE' }); if (c.id === chatId) newChat(); row.remove(); };
     row.append(t, d, x); panel.append(row);
   }
+  panel.append(el('button', { class: 'plain', textContent: 'Log out', onclick: async () => { await fetch('/api/logout', { method: 'POST' }); newChat(); showLogin(); } }));
   panel.hidden = false;
 }
 
@@ -357,8 +429,13 @@ $('stop').onclick = () => ctl && ctl.abort();
 $('chats').onclick = showChats;
 $('new').onclick = newChat;
 
-refreshModels();
-if (location.hash.length > 1) openChat(location.hash.slice(1));
+async function boot() {  // runs on load and again after each login
+  const r = await fetch('/api/session').catch(() => null);  // a 401 shows the login form (fetch wrapper above)
+  if (r && r.status === 401) return;
+  refreshModels();
+  if (location.hash.length > 1) openChat(location.hash.slice(1));
+}
+boot();
 </script>
 </body>
 </html>

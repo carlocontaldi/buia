@@ -51,6 +51,7 @@ services:
       MEMORY_FILES: ${MEMORY_FILES:-workspace/BUIA.md}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}   # extra host names the web UI may be opened under (localhost, 127.0.0.1 and *.ts.net always work)
       TZ: ${TZ:-UTC}
+      BUIA_PASSWORD: ${BUIA_PASSWORD:-}   # web UI login password; empty = nobody can log in
       NVIDIA_DRIVER_CAPABILITIES: utility   # only nvidia-smi (to read VRAM for the model fit check), no compute
     deploy:
       resources:
@@ -69,6 +70,11 @@ services:
         source: ${VAULT_PATH}
         target: /data/vault
         read_only: true                 # the agent can read the vault but never change it
+      - type: bind
+        source: ./sdmodels              # image/video model files: the Models panel downloads them here (sd and sd-video mount the same folder read-only)
+        target: /data/sdmodels          # outside the workspace and the vault, so the model's file tools cannot reach it
+        bind:
+          create_host_path: true
 
   sd:
     profiles: ["sd"]
@@ -81,14 +87,19 @@ services:
     restart: unless-stopped
     init: true
     entrypoint: ["/bin/sh", "-c"]
-    # SD_ARGS (in .env, one line) holds the model flags. The working examples (Z-Image Turbo for images, Wan 2.1 T2V 1.3B for video)
-    # live only in .env.example, so they cannot drift from a copy here.
+    # Model flags: sdmodels/active-image.args (written by "Use" in the Models panel) wins; without it SD_ARGS from .env (one line) is used.
+    # sd-run.sh restarts sd-server when that file changes. The hand-written examples (Z-Image Turbo for images, Wan 2.1 T2V 1.3B for video)
+    # are in .env.example; the Models panel has the same two as presets (agent/sdmodels.py): keep them equal.
     # --lora-model-dir matters: it defaults to "." and the server scans it recursively on /capabilities AND on every img_gen/vid_gen request.
     # The container's working dir is /, so the default scan walks /proc and fails with HTTP 500. /models/loras may simply not exist (scan is skipped).
     # -v makes sd.cpp log the "compute buffer size" lines. Read them with: docker compose logs sd | findstr /c:"compute buffer"
-    # exec: sd-server replaces the shell, so docker stop reaches it and ends it cleanly.
-    command: ["exec /sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_ARGS:-}"]
+    # sd-run.sh passes TERM on to sd-server, so docker stop still ends it cleanly. exec: the script replaces the shell.
+    command: ["exec /bin/sh /sd-run.sh /models/active-image.args ${SD_ARGS:-}"]
     volumes:
+      - type: bind
+        source: ./sd-run.sh
+        target: /sd-run.sh
+        read_only: true
       - type: bind
         source: ./sdmodels   # relative to the folder holding this compose file (buia-stack), next to ./sdcpp
         target: /models
@@ -109,7 +120,7 @@ services:
   sd-video:
     extends:
       service: sd
-    command: ["exec /sd-server --listen-ip 0.0.0.0 --listen-port 1234 -v ${SD_VIDEO_ARGS:-}"]
+    command: ["exec /bin/sh /sd-run.sh /models/active-video.args ${SD_VIDEO_ARGS:-}"]
 
 volumes:
   models:
