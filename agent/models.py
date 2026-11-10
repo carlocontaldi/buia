@@ -83,6 +83,9 @@ def apply_event(ev: dict) -> None:
         LIVE.pop(model, None)  # the model list shows the new state
 
 
+BAD_EVENTS: set = set()  # (event, error type) pairs already reported
+
+
 def parse_event(line: str):
     line = line.strip()
     if line.startswith("data:"):
@@ -104,7 +107,13 @@ async def watch_router() -> None:
                     async for line in r.aiter_lines():
                         ev = parse_event(line)
                         if ev:
-                            apply_event(ev)
+                            try:
+                                apply_event(ev)
+                            except Exception as e:  # an event shape nobody expected must not end progress tracking for good
+                                key = (ev.get("event"), type(e).__name__)
+                                if key not in BAD_EVENTS:  # once per kind: progress events come many times a second
+                                    BAD_EVENTS.add(key)
+                                    print(f"watch_router: ignoring {ev.get('event')} events it cannot read ({type(e).__name__}: {e})", flush=True)
         except httpx.HTTPError:
             pass
         await asyncio.sleep(3)
@@ -351,6 +360,19 @@ async def cached(key, ttl: float, fn):
 
 
 # ---------- machine + estimate ----------
+def free_disk_mb() -> int:
+    """Free space a download can use. / is the container's own disk: on Docker Desktop (WSL2) that is a virtual disk whose free space
+    says nothing about the Windows drive it grows into. The workspace is a bind mount of a Windows folder and reports that drive,
+    so the smaller of the two counts."""
+    free = []
+    for path in ("/", SETTINGS.parent):
+        try:
+            free.append(shutil.disk_usage(path).free)
+        except OSError:
+            pass
+    return min(free) // MB if free else 0
+
+
 def _hardware_sync() -> dict:
     gpu = None
     try:
@@ -373,7 +395,7 @@ def _hardware_sync() -> dict:
     except (OSError, ValueError):
         pass
     return {"gpu": gpu, "ram_total_mb": ram.get("MemTotal", 0), "ram_avail_mb": ram.get("MemAvailable", 0),
-            "disk_free_mb": shutil.disk_usage("/").free // MB}
+            "disk_free_mb": free_disk_mb()}
 
 
 async def machine() -> dict:

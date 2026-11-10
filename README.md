@@ -77,7 +77,7 @@ and builds the `sd` service from `docker-compose.yml`. The first build compiles 
 
 A generation keeps running if you close the page, the phone sleeps or you press Stop; the result is added to the chat when it is done
 (reopen the chat to see it). The chat accepts the next message after that. Stop does not cancel the job itself.
-The sd servers log to Docker (kept to 60 MB each): `docker compose logs sd | findstr /c:"compute buffer"` shows the buffer sizes of the last job.
+Every service keeps only its newest 60 MB of Docker logs (3 files of 20 MB). `docker compose logs sd | findstr /c:"compute buffer"` shows the buffer sizes of the last job.
 
 ## Security
 
@@ -87,6 +87,8 @@ so the limits that matter are in the code:
 
 - The web UI answers only to the host names `localhost`, `127.0.0.1` and `*.ts.net` (plus `ALLOWED_HOSTS` in `.env`), so a web page you visit
   cannot reach the agent on your PC through DNS rebinding.
+- Names that Windows reads as another file are refused: 8.3 short names (`OBSIDI~1`), a trailing dot or space, `:` (NTFS streams) and device names
+  such as `NUL` or `COM1`. Without that, `memory.` or `OBSIDI~1` could get past the checks on `.obsidian` and the memory files, which compare spellings.
 - The file tools write `.md` and `.txt` files only: no scripts, no `.json` (chats, settings), no media. `overwrite` must be a real `true`.
 - Memory files (`MEMORY_FILES`) are loaded into every later prompt, so whatever lands in them acts like a standing instruction. After the model
   has read any other file in a message, it cannot change them in that message; the user asks again in a new one.

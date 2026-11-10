@@ -1,7 +1,14 @@
+x-logging: &logging              # Docker keeps container logs forever unless told otherwise: keep the newest 60 MB per service
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   llama:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:222d8eeee19c4407a0ad00eec534dc5d372c706c4c67f58e3993a25ed8ed3d3e   # pinned to the build known to work (2026-11-06); RTX 50-series + CUDA 13 driver. Older driver: use :server-cuda and drop the digest
     restart: unless-stopped
+    logging: *logging
     environment:
       LLAMA_CACHE: /models            # downloaded models live in this named volume
       HF_TOKEN: ${HF_TOKEN:-}         # only needed for gated Hugging Face repos
@@ -33,6 +40,7 @@ services:
   agent:
     build: ./agent
     restart: unless-stopped
+    logging: *logging
     depends_on: [llama]
     environment:
       LLAMA_URL: http://llama:8080
@@ -86,11 +94,7 @@ services:
         target: /models
         read_only: true
     # no "ports:" on purpose: only the agent container should reach sd-server
-    logging:                         # -v is chatty: keep the newest 60 MB, not everything forever
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "3"
+    logging: *logging                # -v is chatty, so this one matters most
     deploy:
       resources:
         reservations:
