@@ -70,10 +70,10 @@ All settings are in `.env` (see `.env.example` for each one). Common ones: `CTX_
 `.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\`,
 and builds the `sd` service from `docker-compose.yml`. The first build compiles it for CUDA and takes a while.
 
-1. Open **Models**, scroll to **Image and video models**, click **Download** on a preset (Z-Image Turbo for images, Wan 2.1 T2V 1.3B for video),
+1. Open **Models**, scroll to **Image and video models**, click **Download** on a preset (Z-Image Turbo for images, Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video),
    then **Use**. Downloads come from Hugging Face into `sdmodels\`, resume after a cancel or a dropped connection, and are checked against
    their sha256. **Use** makes the sd server restart with that model a few seconds later (`sd-run.sh` watches `sdmodels\active-image.args`
-   and `active-video.args`). There is no fit check for these yet; the video preset was measured at 512x512 with 33 frames on 8 GB.
+   and `active-video.args`). There is no fit check for these yet; the Wan 2.1 preset was measured at 512x512 with 33 frames on 8 GB, Wan 2.2 TI2V 5B not yet.
    Only these presets can be downloaded: each model family needs its own set of files and flags.
    (Doing it by hand still works: put the files into `sdmodels\`, set `SD_ARGS` / `SD_VIDEO_ARGS` in `.env` as in `.env.example`, then
    `docker compose --profile sd up -d`. They apply while no model has been chosen with Use.)

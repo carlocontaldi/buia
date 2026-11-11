@@ -88,8 +88,8 @@ services:
     init: true
     entrypoint: ["/bin/sh", "-c"]
     # Model flags: sdmodels/active-image.args (written by "Use" in the Models panel) wins; without it SD_ARGS from .env (one line) is used.
-    # sd-run.sh restarts sd-server when that file changes. The hand-written examples (Z-Image Turbo for images, Wan 2.1 T2V 1.3B for video)
-    # are in .env.example; the Models panel has the same two as presets (agent/sdmodels.py): keep them equal.
+    # sd-run.sh restarts sd-server when that file changes. The hand-written examples (Z-Image Turbo for images, Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video)
+    # are in .env.example; the Models panel has the same three as presets (agent/sdmodels.py): keep them equal.
     # --lora-model-dir matters: it defaults to "." and the server scans it recursively on /capabilities AND on every img_gen/vid_gen request.
     # The container's working dir is /, so the default scan walks /proc and fails with HTTP 500. /models/loras may simply not exist (scan is skipped).
     # -v makes sd.cpp log the "compute buffer size" lines. Read them with: docker compose logs sd | findstr /c:"compute buffer"
