@@ -41,6 +41,16 @@ PRESETS = [
      "args": "--diffusion-model /models/wan2.1_t2v_1.3B_fp16.safetensors --vae /models/wan_2.1_vae.safetensors "
              "--t5xxl /models/umt5-xxl-encoder-Q4_K_S.gguf --diffusion-fa --max-vram cuda0=5 --lora-model-dir /models/loras "
              "--backend clip=cpu,diffusion=CUDA0,vae=CUDA0 --params-backend te=cpu,diffusion=disk,vae=disk"},
+    {"id": "wan22-ti2v-5b", "kind": "video", "name": "Wan 2.2 TI2V 5B (Q4_K_M)",
+     "note": "Text-to-video, 5B model with its own 16x compressing VAE; trained for 720p at 24 fps. Shares the umt5-xxl text encoder (CPU) with Wan 2.1. "
+             "Not measured on the 8 GB laptop yet.",
+     "files": [("unsloth/Wan2.2-TI2V-5B-GGUF", "Wan2.2-TI2V-5B-Q4_K_M.gguf"),
+               ("unsloth/Wan2.2-TI2V-5B-GGUF", "VAE/Wan2.2_VAE.safetensors"),
+               ("city96/umt5-xxl-encoder-gguf", "umt5-xxl-encoder-Q4_K_S.gguf")],
+     "args": "--diffusion-model /models/Wan2.2-TI2V-5B-Q4_K_M.gguf --vae /models/Wan2.2_VAE.safetensors "
+             "--t5xxl /models/umt5-xxl-encoder-Q4_K_S.gguf --cfg-scale 6.0 --sampling-method euler --flow-shift 3.0 --diffusion-fa "
+             "--max-vram cuda0=5 --lora-model-dir /models/loras "
+             "--backend clip=cpu,diffusion=CUDA0,vae=CUDA0 --params-backend te=cpu,diffusion=disk,vae=disk"},
 ]
 
 RUN: dict[str, dict] = {}  # preset id -> {"state": "downloading" | "failed", "done", "total", "message", "task"}; absent when idle
@@ -59,6 +69,12 @@ def dest(f: tuple) -> Path:
 
 def active_file(p: dict) -> Path:
     return SD_DIR / f"active-{p['kind']}.args"
+
+
+def shared(p: dict, d: Path) -> bool:
+    """True when another preset lists file d and has some other file on disk: deleting p must keep d (Wan 2.1 and 2.2 share the text encoder)."""
+    return any(dest(g) == d and any(dest(x) != d and dest(x).exists() for x in q["files"])
+               for q in PRESETS if q is not p for g in q["files"])
 
 
 def is_active(p: dict) -> bool:
@@ -247,6 +263,8 @@ async def api_delete(id: str):
         raise HTTPException(409, "cancel the download first")
     RUN.pop(id, None)
     for f in p["files"]:
+        if shared(p, dest(f)):
+            continue
         dest(f).unlink(missing_ok=True)
         dest(f).with_name(dest(f).name + ".part").unlink(missing_ok=True)
     if is_active(p):  # the server then goes back to SD_ARGS / SD_VIDEO_ARGS from .env
