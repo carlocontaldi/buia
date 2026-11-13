@@ -1,4 +1,7 @@
-# BUIA
+<h1 align="center">
+  <img src="agent/static/buia-logo.png" alt="" width="120"><br>
+  BUIA
+</h1>
 
 A local personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
 It reads and writes your notes through file tools, remembers things in `BUIA.md`, streams replies,
