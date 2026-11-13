@@ -100,22 +100,29 @@ def parse_event(line: str):
 
 async def watch_router() -> None:
     """Best effort: follow /models/sse for download and load progress; reconnect forever."""
+    last_error = None
     while True:
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10)) as c:
                 async with c.stream("GET", f"{LLAMA_URL}/models/sse") as r:
+                    r.raise_for_status()
                     async for line in r.aiter_lines():
                         ev = parse_event(line)
                         if ev:
                             try:
                                 apply_event(ev)
                             except Exception as e:  # an event shape nobody expected must not end progress tracking for good
-                                key = (ev.get("event"), type(e).__name__)
+                                event_name = ev.get("event") if isinstance(ev, dict) else type(ev).__name__
+                                key = (event_name, type(e).__name__)
                                 if key not in BAD_EVENTS:  # once per kind: progress events come many times a second
                                     BAD_EVENTS.add(key)
-                                    print(f"watch_router: ignoring {ev.get('event')} events it cannot read ({type(e).__name__}: {e})", flush=True)
-        except httpx.HTTPError:
-            pass
+                                    print(f"watch_router: ignoring {event_name} events it cannot read ({type(e).__name__}: {e})", flush=True)
+                    last_error = None
+        except httpx.HTTPError as e:
+            msg = f"watch_router: {type(e).__name__}: {e}; reconnecting in 3s"
+            if msg != last_error:
+                print(msg, flush=True)
+            last_error = msg
         await asyncio.sleep(3)
 
 
