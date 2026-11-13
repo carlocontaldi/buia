@@ -22,13 +22,13 @@ It generates text, images and videos, reads and writes your notes through file t
 
 ```powershell
 mkdir $HOME\buia -Force; cd $HOME\buia
-git clone https://github.com/carlocontaldi/buia.git buia-stack
-cd buia-stack
+git clone https://github.com/carlocontaldi/buia.git buia-core
+cd buia-core
 .\install.cmd              # add -Tailscale to expose it to your tailnet, -Sd for image/video generation
 ```
 
 `install.ps1` checks Docker and GPU access, creates `.env` from `.env.example` (with `BUIA_PATH` set to the folder
-above the repo), creates `BUIA.md` from `templates/BUIA.md` if it does not exist, builds and starts the stack,
+above the repo), creates `BUIA.md` from `templates/BUIA.md` if it does not exist, builds and starts the core,
 and waits until it answers. It never overwrites an existing `.env` or `BUIA.md`.
 
 Keep the clone directly inside your buia folder (any name): it sits in the folder the agent can read and write, and the agent's
@@ -41,7 +41,7 @@ Then open http://127.0.0.1:8000 and log in with the password the installer print
 ## Update
 
 ```powershell
-cd $HOME\buia\buia-stack
+cd $HOME\buia\buia-core
 .\update.cmd               # git pull + rebuild + restart
 .\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
 ```
