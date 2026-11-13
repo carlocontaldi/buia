@@ -3,9 +3,14 @@
   BUIA
 </h1>
 
-A local personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
-It reads and writes your notes through file tools, remembers things in `BUIA.md`, streams replies,
-keeps chat history as JSON files, and can be reached from your phone over Tailscale.
+> **bu·ia** · Italian /ˈbuja/ (*BOO-ya*) · *adjective*, feminine of *buio*
+>
+> Dark; without light.
+>
+> **BUIA**: *Bottega Unipersonale d'Intelligenza Artificiale*, a one-person AI workshop.
+
+A local standalone personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
+It generates text, images and videos, reads and writes your notes through file tools, remembers things in `BUIA.md`, streams replies, keeps chat history as JSON files, and can be reached from your phone over Tailscale.
 
 ## Requirements
 
