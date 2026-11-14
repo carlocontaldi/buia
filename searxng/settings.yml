@@ -1,0 +1,8 @@
+# Settings of the bundled SearXNG (compose service `searxng`): the agent's web_search tool asks it for results.
+# Only the agent reaches it (the service publishes no port). Documentation: https://docs.searxng.org/admin/settings/
+use_default_settings: true
+
+search:
+  formats:    # json is what the agent reads (SearXNG answers 403 to format=json unless it is listed here); html is for debugging
+    - html
+    - json

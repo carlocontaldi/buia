@@ -10,7 +10,7 @@
 > **BUIA**: *Bottega Unipersonale d'Intelligenza Artificiale*, a one-person AI workshop.
 
 A local standalone personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
-It generates text, images and videos, reads and writes your notes through file tools, remembers things in `BUIA.md`, streams replies, keeps chat history as JSON files, and can be reached from your phone over Tailscale.
+It generates text, images and videos, reads and writes your notes through file tools, searches the web and reads pages, remembers things in `BUIA.md`, streams replies, keeps chat history as JSON files, and can be reached from your phone over Tailscale.
 
 ## Requirements
 
@@ -65,13 +65,23 @@ is protected by one shared password only, and it can write notes. Everyone on yo
 
 All settings are in `.env` (see `.env.example` for each one). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
 `MEMORY_FILES` (which `.md` files are loaded on every request; default `BUIA.md`, `memory/*.md`, `memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
-`ALLOWED_HOSTS` (extra host names for the web UI; see Security), `BUIA_PASSWORD` (the web UI password).
+`ALLOWED_HOSTS` (extra host names for the web UI; see Security), `BUIA_PASSWORD` (the web UI password), `WEB_ACCESS` (`on` by default; see Web access).
 
 ## Troubleshooting
 
 - `docker compose config` prints the resolved configuration and catches path or syntax mistakes.
 - `docker compose logs llama --tail 50` and `docker compose logs agent --tail 50` show what each container is doing.
 - Models panel says the GPU is not detected: set `GPU_VRAM_MB` in `.env`, then `docker compose up -d`.
+
+## Web access
+
+The assistant can search the web and read pages, and it can do so from the first start: `web_search` asks a bundled [SearXNG](https://docs.searxng.org/)
+(compose service `searxng`, no account or API key, no published port) and `web_fetch` reads one page as plain text with its links.
+The first start downloads the SearXNG image. To turn the tools off, set `WEB_ACCESS=off` in `.env` and run `docker compose up -d`; the `searxng`
+container then idles unless you also run `docker compose stop searxng`. If a search says it is not available, `docker compose logs searxng --tail 50` shows why.
+Searches go out from your PC through SearXNG to Brave, DuckDuckGo, Google and other engines, so they are as visible to those as any search you type yourself.
+
+The `searxng` image is the moving `latest` tag, unlike the llama image. To freeze it, follow the comment above the service in `docker-compose.yml`.
 
 ## Image and video generation (optional)
 
@@ -111,7 +121,16 @@ so the limits that matter are in the code:
 - The file tools write `.md` and `.txt` files only: no scripts, no `.json` (chats, settings), no media. `overwrite` must be a real `true`.
 - Memory files (`MEMORY_FILES`) are loaded into every later prompt, so whatever lands in them acts like a standing instruction. After the model
   has read any other file in a message, it cannot change them in that message; the user asks again in a new one.
+- Web pages and search results are unvetted text like notes are: after the model has used a web tool in a message, it cannot change the memory files in that message either.
+- `web_fetch` opens only an address you wrote in the chat or one that a search or a page listed in that same reply. A page cannot make the model open an address it built
+  (for example one with your notes in the query), because such an address was never listed.
+- `web_fetch` opens public internet addresses only: `localhost`, your home network, the other containers (the model server, the search server), cloud metadata addresses and
+  your tailnet are refused. This is checked again at every redirect, and the connection goes to the address that was checked, so a second DNS answer cannot redirect it.
+  It reads at most 1.5 MB of HTML, text, JSON or XML per page, and 8000 characters per tool call.
 - No new message in a chat while its generation is running. There is no limit on how many images or videos one message can ask for; only `MAX_STEPS` (8 tool rounds per message) stops a runaway loop, and Stop does not cancel a job that already started.
+
+Not covered: the words of a search are chosen by the model, so a page that tells it to search for something from your notes sends those words to the search engines
+(the page's author does not see them). Turn `WEB_ACCESS` off if that matters to you.
 
 Not covered: if Obsidian has plugins that run code found in notes (Dataview JS, Templater), a note the agent wrote could run when you open it.
 Keep those off for the folders the agent writes to.

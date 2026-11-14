@@ -52,6 +52,8 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}   # extra host names the web UI may be opened under (localhost, 127.0.0.1 and *.ts.net always work)
       TZ: ${TZ:-UTC}
       BUIA_PASSWORD: ${BUIA_PASSWORD:-}   # web UI login password; empty = nobody can log in
+      WEB_ACCESS: ${WEB_ACCESS:-on}       # the web_search and web_fetch tools; off removes both
+      SEARCH_URL: http://searxng:8080     # where web_search asks (the searxng service below)
       NVIDIA_DRIVER_CAPABILITIES: utility   # only nvidia-smi (to read VRAM for the model fit check), no compute
     deploy:
       resources:
@@ -75,6 +77,23 @@ services:
         target: /data/sdmodels          # outside the workspace and the vault, so the model's file tools cannot reach it
         bind:
           create_host_path: true
+
+  # Web search for the agent's web_search tool: a SearXNG metasearch engine, no account or API key. It starts with everything else; the agent
+  # does not wait for it, so a failed start only makes web_search report an error. WEB_ACCESS=off in .env removes the tools but not this container.
+  # The image is the moving tag: to freeze it like the llama image, run "docker pull searxng/searxng:latest" and then
+  # docker image inspect searxng/searxng:latest --format "{{index .RepoDigests 0}}", and replace the tag below with the printed name@sha256:... value.
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      # Signs cookies of SearXNG's own web page, which nobody can open (no "ports:" on purpose), so a fixed value is enough
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-buia-internal-searxng}
+    volumes:
+      - type: bind
+        source: ./searxng/settings.yml   # turns on the json output web_search reads
+        target: /etc/searxng/settings.yml
+        read_only: true
 
   sd:
     profiles: ["sd"]
