@@ -12,11 +12,20 @@
 A local standalone personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
 It generates text, images and videos, reads and writes your notes through file tools, searches the web and reads pages, remembers things in `BUIA.md`, streams replies, keeps chat history as JSON files, and can be reached from your phone over Tailscale.
 
+| Service | Started | What it does |
+|---|---|---|
+| `llama` | always | llama.cpp server in router mode: the chat models, one in VRAM at a time |
+| `agent` | always | the FastAPI agent and the web UI on `127.0.0.1:8000` (the only published port) |
+| `searxng` | always | the search engine behind `web_search` (no published port) |
+| `sd`, `sd-video` | `-Sd` | stable-diffusion.cpp: image generation and video generation (Wan) |
+| `cogvideo` | `-CogVideo` | CogVideoX 2B video generation (Diffusers, PyTorch) |
+
 ## Requirements
 
 - Windows 11, Docker Desktop (WSL2 backend) with NVIDIA GPU support
 - NVIDIA driver recent enough for CUDA 13 (the compose file uses `server-cuda13`, pinned by digest to a known working build; for an older driver change the image to `server-cuda` and drop the digest)
 - Git. Tailscale if you want phone access.
+- Developed and measured on one machine: RTX 5050 Laptop GPU (8 GB VRAM), 32 GB RAM. The image and video presets assume that size; see the notes in each section.
 
 ## Install
 
@@ -37,6 +46,13 @@ They also refuse `.obsidian/` (plugins there are code Obsidian runs), and the `v
 
 Then open http://127.0.0.1:8000 and log in with the password the installer printed (it is saved in `.env` as `BUIA_PASSWORD`; edit it there and run
 `docker compose up -d` to change it). Click **Models**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
+
+## Web UI
+
+- **Models** downloads and selects chat models (Hugging Face repo, quant marked `fits` or not) and, below that, the image and video presets.
+- **Think** lets the model reason before it answers (slower, uses more context). Off by default; the choice is kept per browser.
+- **Theme** (the selector in the header): Plain, Light, Dark, Sepia, BUIA. Plain is the default and follows your operating system's light or dark setting; the choice is kept per browser.
+- **Chats** lists the chats saved as JSON files in `chats\` inside your buia folder. Generated images and videos stay in their chat.
 
 ## Update
 
@@ -173,8 +189,9 @@ docker run --rm -v "${PWD}/cogvideo:/w" -w /w python:3.12-slim sh -c "pip instal
 docker compose up -d --build cogvideo
 ```
 
-(`--allow-unsafe` keeps `setuptools` in the file: torch needs it and `python:3.12-slim` does not ship it.) The file in the repo was generated from pip's resolution plus PyPI's hashes instead,
-and has not been built in Docker yet.
+(`--allow-unsafe` keeps `setuptools` in the file: torch needs it and `python:3.12-slim` does not ship it.) The file in the repo was generated from pip's resolution plus PyPI's hashes instead.
+It has been built and run on the 8 GB laptop; a first run failed in the denoising loop because the prompt embeddings were still on the CPU, and `cogvideo/generate.py`
+now moves them to the GPU. That fix has not been confirmed by a finished video yet.
 
 The base image tag `python:3.12-slim` in `agent/Dockerfile` can still move on a rebuild. To freeze it, run the two commands in the comment at the top of
 the Dockerfile and replace the tag with the printed `python@sha256:...` value (the llama image is already pinned that way).
