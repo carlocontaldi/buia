@@ -13,21 +13,28 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-PASSWORD = os.getenv("BUIA_PASSWORD", "")
 COOKIE = "buia_session"
 SESSION_SECONDS = 30 * 86400
 OPEN = {"/api/login", "/api/health"}  # reachable without a session: the login itself and the installer's readiness check
-KEY = hashlib.sha256(b"buia-session\0" + PASSWORD.encode()).digest()
 MAX_FAILS, LOCK_SECONDS = 5, 60  # after 5 wrong passwords in a row, every attempt is refused for a minute
 fails, locked_until = 0, 0.0
 
 
+def password() -> str:
+    return os.getenv("BUIA_PASSWORD", "")
+
+
+def key() -> bytes:
+    return hashlib.sha256(b"buia-session\0" + password().encode()).digest()
+
+
 def sign(expiry: str) -> str:
-    return hmac.new(KEY, expiry.encode(), "sha256").hexdigest()
+    return hmac.new(key(), expiry.encode(), "sha256").hexdigest()
 
 
 def valid(token: str | None) -> bool:
-    if not PASSWORD:  # no password set: KEY would be derivable by anyone, so no cookie counts
+    pwd = password()
+    if not pwd:  # no password set: KEY would be derivable by anyone, so no cookie counts
         return False
     expiry, _, mac = (token or "").partition(".")
     return expiry.isascii() and expiry.isdigit() and int(expiry) > time.time() and hmac.compare_digest(mac, sign(expiry))
@@ -49,11 +56,12 @@ class Login(BaseModel):
 @router.post("/login")
 async def login(body: Login, request: Request):
     global fails, locked_until
-    if not PASSWORD:
+    pwd = password()
+    if not pwd:
         raise HTTPException(503, "BUIA_PASSWORD is not set in .env. Run .\\install.cmd (it creates one), then reload this page.")
     if time.time() < locked_until:
         raise HTTPException(429, "too many wrong passwords; wait a minute")
-    if not hmac.compare_digest(body.password.encode(), PASSWORD.encode()):
+    if not hmac.compare_digest(body.password.encode(), pwd.encode()):
         fails += 1
         if fails >= MAX_FAILS:
             fails, locked_until = 0, time.time() + LOCK_SECONDS
