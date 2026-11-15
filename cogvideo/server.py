@@ -53,7 +53,10 @@ def check(req: dict) -> tuple[dict | None, str]:
             return None, f"CogVideoX-2b makes {WIDTH}x{HEIGHT} videos of {FRAMES} frames only ({key} was {req[key]})"
     if req.get("output_format", "webm") != "webm":
         return None, "output_format must be webm"
-    steps = (req.get("sample_params") or {}).get("sample_steps", DEFAULT_STEPS)
+    sample_params = req.get("sample_params")
+    if sample_params is not None and not isinstance(sample_params, dict):
+        return None, "sample_params must be an object"
+    steps = (sample_params or {}).get("sample_steps", DEFAULT_STEPS)
     if not isinstance(steps, int) or not MIN_STEPS <= steps <= MAX_STEPS:
         return None, f"sample_steps must be an integer from {MIN_STEPS} to {MAX_STEPS}"
     seed = req.get("seed", -1)
