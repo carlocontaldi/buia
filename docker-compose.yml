@@ -141,5 +141,29 @@ services:
       service: sd
     command: ["exec /bin/sh /sd-run.sh /models/active-video.args ${SD_VIDEO_ARGS:-}"]
 
+  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with .\install.cmd -CogVideo
+  # (it sets COGVIDEO=on in .env, which update.ps1 reads). Pick CogVideoX in the Models panel (Use): from then on video jobs go here instead of sd-video.
+  # Each job runs in a fresh process (cogvideo/server.py starts cogvideo/generate.py), so this service holds no VRAM while idle. The 9.5 GB text encoder
+  # runs on the CPU: Docker Desktop's WSL2 VM needs about 12 GB of free RAM for a job (see README > Image and video generation).
+  cogvideo:
+    profiles: ["cogvideo"]
+    build: ./cogvideo
+    restart: unless-stopped
+    init: true
+    logging: *logging                # prints "step i/N" while a video is made
+    volumes:
+      - type: bind
+        source: ./sdmodels           # the Models panel downloads CogVideoX-2b into sdmodels/CogVideoX-2b
+        target: /models
+        read_only: true
+    # no "ports:" on purpose: only the agent container should reach it
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   models:

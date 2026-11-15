@@ -371,21 +371,26 @@ SD_VIDEO_URL = os.getenv("SD_VIDEO_URL", "http://sd-video:1234")  # sd-server lo
 VIDEO_MAX_SIDE, VIDEO_MAX_FRAMES, VIDEO_MAX_STEPS = 512, 33, 20
 IMAGE_MAX_SIDE = 768  # not measured yet: raise only after measuring
 VIDEO_TIMEOUT = 900  # seconds to wait for one job
+# CogVideoX-2b (cogvideo service, chosen in the Models panel) has one fixed format; these must equal cogvideo/server.py. Steps: 50 is the model card's value.
+# Not measured on the 8 GB laptop: the timeout is a generous guess, lower the default steps if jobs take too long.
+COG_FORMAT, COG_STEPS, COG_DEFAULT_STEPS, COG_TIMEOUT = (720, 480, 49), (10, 50), 50, 3600
 GENERATED = DATA / "workspace" / "generated"  # images and videos made by the tools
 MEDIA_MIME = {"png": "image/png", "webp": "image/webp", "webm": "video/webm"}  # what the chat UI can show
 MEDIA_RE = re.compile(r"\d{8}-\d{6}-[a-z0-9-]+\.(?:png|webp|webm)")
 MEDIA_TOOLS = ("generate_image", "generate_video")  # tools whose result is shown in the chat
 
 
-def _sd_job(kind: str, body: dict) -> tuple[str, list]:
-    """Run one job on sd-server (kind: img_gen or vid_gen). Returns (text for the model, media entries for the chat UI)."""
+def _sd_job(kind: str, body: dict, cog: bool = False) -> tuple[str, list]:
+    """Run one job on sd-server (kind: img_gen or vid_gen), or on the cogvideo service (cog=True), which speaks the same API.
+    Returns (text for the model, media entries for the chat UI)."""
     label = "video" if kind == "vid_gen" else "image"
-    base = SD_VIDEO_URL if kind == "vid_gen" else SD_URL
+    base = sdmodels.COG_URL if cog else SD_VIDEO_URL if kind == "vid_gen" else SD_URL
+    timeout = COG_TIMEOUT if cog else VIDEO_TIMEOUT
     try:  # check the server before unloading the chat model
         caps = httpx.get(f"{base}/sdcpp/v1/capabilities", timeout=5)
         caps.raise_for_status()
     except httpx.HTTPError as e:
-        return f"error: {label} server not reachable at {base} ({type(e).__name__}). Start it with: docker compose --profile sd up -d", []
+        return f"error: {label} server not reachable at {base} ({type(e).__name__}). Start it with: docker compose --profile {'cogvideo' if cog else 'sd'} up -d", []
     modes = caps.json().get("supported_modes")
     if modes and kind not in modes:  # one model at a time: an image request on a video model (or the reverse) cannot work
         return f"error: the sd server runs a model that does not support {kind} (it supports: {', '.join(modes)}). Change the model in SD_ARGS (.env) and restart the sd service.", []
@@ -395,7 +400,7 @@ def _sd_job(kind: str, body: dict) -> tuple[str, list]:
     if r.status_code != 202:
         return f"error: {label} server refused the job: HTTP {r.status_code} {r.text[:200]}", []
     poll_url = r.json()["poll_url"]
-    while time.time() - t0 < VIDEO_TIMEOUT:
+    while time.time() - t0 < timeout:
         j = httpx.get(base + poll_url, timeout=30).json()
         if j["status"] == "completed":
             res = j["result"]
@@ -416,13 +421,21 @@ def _sd_job(kind: str, body: dict) -> tuple[str, list]:
         if j["status"] in ("failed", "cancelled"):
             return f"error: {label} job {j['status']}: {j.get('error')}", []
         time.sleep(2)
-    return f"error: {label} job not finished after {VIDEO_TIMEOUT} s (the server may still be working on it)", []
+    return f"error: {label} job not finished after {timeout} s (the server may still be working on it)", []
 
 
-def generate_video(prompt: str, width: int = 256, height: int = 256, frames: int = 17, steps: int = 10, seed: int = 42) -> str | tuple[str, list]:
-    prompt, width, height, frames, steps, seed = prompt.strip(), int(width), int(height), int(frames), int(steps), int(seed)
+def generate_video(prompt: str, width: int = 256, height: int = 256, frames: int = 17, steps: int | None = None, seed: int = 42) -> str | tuple[str, list]:
+    prompt, width, height, frames, seed = prompt.strip(), int(width), int(height), int(frames), int(seed)
     if not prompt:
         return "error: empty prompt"
+    if sdmodels.cog_active():  # CogVideoX makes one format only: width, height and frames are not used
+        steps = COG_DEFAULT_STEPS if steps is None else int(steps)
+        if not COG_STEPS[0] <= steps <= COG_STEPS[1]:
+            return f"error: steps must be between {COG_STEPS[0]} and {COG_STEPS[1]}"
+        w, h, n = COG_FORMAT
+        return _sd_job("vid_gen", {"prompt": prompt, "width": w, "height": h, "video_frames": n, "seed": seed,
+                                   "sample_params": {"sample_steps": steps}, "output_format": "webm"}, cog=True)
+    steps = 10 if steps is None else int(steps)
     if not (128 <= width <= VIDEO_MAX_SIDE and 128 <= height <= VIDEO_MAX_SIDE and width % 16 == 0 and height % 16 == 0):
         return f"error: width and height must be multiples of 16 between 128 and {VIDEO_MAX_SIDE}"
     if not (5 <= frames <= VIDEO_MAX_FRAMES and (frames - 1) % 4 == 0):
@@ -468,7 +481,9 @@ TOOLS = [
        {"path": S, "content": S}, ["path", "content"]),
     fn("generate_video", "Make a short video from a text prompt with the local video model. Slow: about 20 s to 3 min. "
        "Saves a .webm in workspace/generated/ and returns its path. It unloads the chat model while it runs, so the next reply may start slowly. "
-       "Defaults 256x256, 17 frames, 10 steps; width/height are multiples of 16 up to 512, frames are 5, 9, 13, ... up to 33, steps up to 20.",
+       "Defaults 256x256, 17 frames, 10 steps; width/height are multiples of 16 up to 512, frames are 5, 9, 13, ... up to 33, steps up to 20. "
+       "If the CogVideoX model is selected instead, it always makes 720x480 and 49 frames (6 s) and ignores width, height and frames; "
+       "steps are 10 to 50 (default 50), it takes many minutes, and the prompt must be English and under about 150 words.",
        {"prompt": S, "width": I, "height": I, "frames": I, "steps": I, "seed": I}, ["prompt"]),
     fn("generate_image", "Make an image from a text prompt with the local image model. Slow: seconds to minutes. "
        "Saves a .png in workspace/generated/. It unloads the chat model while it runs, so the next reply may start slowly. "

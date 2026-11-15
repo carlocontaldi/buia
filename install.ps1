@@ -1,7 +1,8 @@
 # Installs or re-applies BUIA. Run from this folder:  .\install.ps1
 # Add -Tailscale to also expose the UI to your tailnet (phone access).
 # Add -Sd to also set up image/video generation (clones stable-diffusion.cpp and builds the sd service; the first build is long).
-param([switch]$Tailscale, [switch]$Sd)
+# Add -CogVideo to also build the cogvideo service (CogVideoX-2b text-to-video, PyTorch; the first build downloads several GB).
+param([switch]$Tailscale, [switch]$Sd, [switch]$CogVideo)
 
 $SdTag = "master-920-2f88688"   # stable-diffusion.cpp release the sd service is built from
 
@@ -70,6 +71,16 @@ if ($Sd) {
     New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
     $compose = @("--profile", "sd")
     Write-Host "Download an image and a video model in the web UI (Models > Image and video models), or put the files named in SD_ARGS / SD_VIDEO_ARGS (.env) into $PSScriptRoot\sdmodels"
+}
+
+# 5b. Optional: CogVideoX-2b. The flag lives in .env so that update.ps1 keeps rebuilding the service
+if ($CogVideo) {
+    Set-Content .env (@(Get-Content .env | Where-Object { $_ -notmatch '^COGVIDEO=' }) + 'COGVIDEO=on') -Encoding ascii
+}
+if (@(Get-Content .env) -match '^COGVIDEO=on') {
+    New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
+    $compose += @("--profile", "cogvideo")
+    Write-Host "Download CogVideoX 2B in the web UI (Models > Image and video models), then click Use. See README > CogVideoX before the first video."
 }
 
 # 6. Build and start

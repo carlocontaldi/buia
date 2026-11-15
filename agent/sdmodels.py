@@ -4,6 +4,10 @@ sd-server loads one model when it starts, and every model family needs its own s
 flags. So this is a short list of presets, not "any repo": each one is a set of files plus the flags that go with them (the ones
 .env.example documents, measured on the RTX 5050 laptop). "Use" writes the flags to sdmodels/active-<kind>.args; sd-run.sh inside the
 sd containers sees the file change and restarts sd-server with them. Nothing here touches Docker or .env.
+
+One preset is not an sd.cpp model: CogVideoX-2b (stable-diffusion.cpp does not support it) runs in the cogvideo service (cogvideo/), which
+loads a Diffusers model folder per job. Its preset has "engine": "cogvideo" and no flags. "Use" writes sdmodels/active-video.engine instead,
+which makes the agent send video jobs to the cogvideo service; "Use" on any other video preset removes that file again.
 """
 import asyncio
 import hashlib
@@ -20,9 +24,11 @@ from pydantic import BaseModel
 
 SD_DIR = Path(os.getenv("SD_MODELS_DIR", "/data/sdmodels"))  # ./sdmodels on the host; the sd containers see it as /models
 SD_URLS = {"image": os.getenv("SD_URL", "http://sd:1234"), "video": os.getenv("SD_VIDEO_URL", "http://sd-video:1234")}
+COG_URL = os.getenv("COGVIDEO_URL", "http://cogvideo:1234")  # compose service `cogvideo` (profile cogvideo)
 MB = models.MB
 
-# files: (Hugging Face repo, path inside it); each is saved as sdmodels/<last part of the path>, which is the name the flags use.
+# files: (Hugging Face repo, path inside it[, path under sdmodels/]); without the third item a file is saved as sdmodels/<last part of the
+# path>, which is the name the flags use. A Diffusers model keeps its folder layout (text_encoder/config.json, vae/config.json, ...), so it uses the third item.
 # Keep args equal to the matching SD_ARGS / SD_VIDEO_ARGS example in .env.example.
 PRESETS = [
     {"id": "z-image-turbo", "kind": "image", "name": "Z-Image Turbo (Q4_0)",
@@ -51,6 +57,16 @@ PRESETS = [
              "--t5xxl /models/umt5-xxl-encoder-Q4_K_S.gguf --cfg-scale 6.0 --sampling-method euler --flow-shift 3.0 --diffusion-fa "
              "--max-vram cuda0=5 --lora-model-dir /models/loras "
              "--backend clip=cpu,diffusion=CUDA0,vae=CUDA0 --params-backend te=cpu,diffusion=disk,vae=disk"},
+    {"id": "cogvideox-2b", "kind": "video", "engine": "cogvideo", "name": "CogVideoX 2B (Diffusers, fp16)",
+     "note": "Text-to-video, always 720x480 and 6 s (49 frames at 8 fps), English prompts. Runs in the separate cogvideo service "
+             "(install with -CogVideo). The 9.5 GB text encoder runs on the CPU, so it needs about 12 GB of free RAM. Not measured on the 8 GB laptop yet.",
+     "files": [("zai-org/CogVideoX-2b", path, "CogVideoX-2b/" + path) for path in (
+         "model_index.json", "scheduler/scheduler_config.json",
+         "text_encoder/config.json", "text_encoder/model.safetensors.index.json",
+         "text_encoder/model-00001-of-00002.safetensors", "text_encoder/model-00002-of-00002.safetensors",
+         "tokenizer/added_tokens.json", "tokenizer/special_tokens_map.json", "tokenizer/spiece.model", "tokenizer/tokenizer_config.json",
+         "transformer/config.json", "transformer/diffusion_pytorch_model.safetensors",
+         "vae/config.json", "vae/diffusion_pytorch_model.safetensors")]},
 ]
 
 RUN: dict[str, dict] = {}  # preset id -> {"state": "downloading" | "failed", "done", "total", "message", "task"}; absent when idle
@@ -64,11 +80,31 @@ def preset(pid: str) -> dict:
 
 
 def dest(f: tuple) -> Path:
-    return SD_DIR / f[1].rsplit("/", 1)[-1]
+    return SD_DIR / (f[2] if len(f) > 2 else f[1].rsplit("/", 1)[-1])
 
 
 def active_file(p: dict) -> Path:
     return SD_DIR / f"active-{p['kind']}.args"
+
+
+ENGINE_FILE = SD_DIR / "active-video.engine"  # id of the engine preset (CogVideoX) when it is the video model; absent = the sd video server
+
+
+def cog_active() -> bool:
+    """True when video jobs go to the cogvideo service: CogVideoX was chosen with Use and its files are still all there."""
+    try:
+        p = preset(ENGINE_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, HTTPException):
+        return False
+    return p.get("engine") == "cogvideo" and all(dest(f).exists() for f in p["files"])
+
+
+def put(path: Path, text: str) -> None:
+    """Replaces path with text in one step: sd-run.sh restarts the server on any change, so it must never see a half-written file."""
+    fd, tmp = tempfile.mkstemp(dir=SD_DIR, suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    os.replace(tmp, path)
 
 
 def shared(p: dict, d: Path) -> bool:
@@ -77,11 +113,21 @@ def shared(p: dict, d: Path) -> bool:
                for q in PRESETS if q is not p for g in q["files"])
 
 
-def is_active(p: dict) -> bool:
+def has_args(p: dict) -> bool:
+    """True when the sd server of p's kind is set (active-<kind>.args) to p's flags."""
     try:
         return active_file(p).read_text(encoding="utf-8").strip() == p["args"]
     except OSError:
         return False
+
+
+def is_active(p: dict) -> bool:
+    try:
+        if p.get("engine"):
+            return ENGINE_FILE.read_text(encoding="utf-8").strip() == p["id"]
+    except OSError:
+        return False
+    return has_args(p) and not (p["kind"] == "video" and ENGINE_FILE.exists())  # an sd video preset is not in use while CogVideoX has the video jobs
 
 
 # ---------- Hugging Face ----------
@@ -101,7 +147,7 @@ async def file_info(c: httpx.AsyncClient, repo: str, path: str) -> dict:
 async def infos(p: dict) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=models._hf_headers()) as c:
-            return await asyncio.gather(*(file_info(c, repo, path) for repo, path in p["files"]))
+            return await asyncio.gather(*(file_info(c, repo, path) for repo, path, *_ in p["files"]))
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Hugging Face unreachable: {e}")
 
@@ -123,6 +169,7 @@ async def fetch_file(repo: str, path: str, d: Path, info: dict, progress) -> Non
     """Download repo/path to d. Written to d.part first and renamed only when size and sha256 match, so d exists only when complete.
     A .part left by a cancel or a dropped connection is continued with a Range request."""
     part = d.with_name(d.name + ".part")
+    part.parent.mkdir(parents=True, exist_ok=True)  # Diffusers models keep their folders
     have = part.stat().st_size if part.exists() else 0
     if have > info["size"]:
         part.unlink()
@@ -180,9 +227,10 @@ class IdBody(BaseModel):
 
 
 async def server_state(kind: str) -> dict:
+    url = COG_URL if kind == "video" and cog_active() else SD_URLS[kind]
     try:
         async with httpx.AsyncClient(timeout=2) as c:
-            j = (await c.get(f"{SD_URLS[kind]}/sdcpp/v1/capabilities")).json()
+            j = (await c.get(f"{url}/sdcpp/v1/capabilities")).json()
         return {"up": True, "model": (j.get("model") or {}).get("stem")}
     except (httpx.HTTPError, ValueError):
         return {"up": False}
@@ -202,7 +250,7 @@ async def view(p: dict) -> dict:
     left = None if total is None else sum(s for s, h in zip(sizes, have) if not h)
     free = shutil.disk_usage(SD_DIR).free // MB if SD_DIR.is_dir() else 0
     return {"id": p["id"], "kind": p["kind"], "name": p["name"], "note": p["note"],
-            "files": [{"name": dest(f).name, "have": h} for f, h in zip(p["files"], have)],
+            "files": [{"name": dest(f).relative_to(SD_DIR).as_posix(), "have": h} for f, h in zip(p["files"], have)],
             "size_mb": None if total is None else round(total / MB), "ready": all(have), "active": all(have) and is_active(p),
             "state": run.get("state"), "done": run.get("done", 0), "total": run.get("total"), "message": run.get("message"),
             "disk_ok": left is None or free >= left / MB + 1024}
@@ -248,11 +296,13 @@ async def api_use(body: IdBody):
     p = preset(body.id)
     if not all(dest(f).exists() for f in p["files"]):
         raise HTTPException(409, "download the model first")
-    if not is_active(p):  # same flags again would only restart the server for nothing
-        fd, tmp = tempfile.mkstemp(dir=SD_DIR, suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(p["args"] + "\n")
-        os.replace(tmp, active_file(p))
+    if p.get("engine"):  # the sd video server keeps its last model (idle, its weights stay on disk) and gets no jobs
+        put(ENGINE_FILE, p["id"])
+    else:
+        if p["kind"] == "video":
+            ENGINE_FILE.unlink(missing_ok=True)
+        if not has_args(p):  # same flags again would only restart the server for nothing
+            put(active_file(p), p["args"])
     return {"ok": True}
 
 
@@ -267,6 +317,16 @@ async def api_delete(id: str):
             continue
         dest(f).unlink(missing_ok=True)
         dest(f).with_name(dest(f).name + ".part").unlink(missing_ok=True)
-    if is_active(p):  # the server then goes back to SD_ARGS / SD_VIDEO_ARGS from .env
+        for d in dest(f).parents:  # folders of a Diffusers model: remove the ones that are now empty, never sdmodels/ itself
+            if d == SD_DIR:
+                break
+            try:
+                d.rmdir()
+            except OSError:
+                break
+    if p.get("engine"):
+        if is_active(p):
+            ENGINE_FILE.unlink(missing_ok=True)  # video jobs go back to the sd video server
+    elif has_args(p):  # the server then goes back to SD_ARGS / SD_VIDEO_ARGS from .env
         active_file(p).unlink(missing_ok=True)
     return {"ok": True}

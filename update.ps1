@@ -28,6 +28,8 @@ if ((Test-Path .env) -and -not (@(Get-Content .env) -match '^BUIA_PASSWORD=')) {
 # image/video generation is rebuilt too if it was installed (install.ps1 -Sd)
 $compose = @()
 if (Test-Path sdcpp) { $compose = @("--profile", "sd") }
+# and the CogVideoX service, if install.ps1 -CogVideo turned it on in .env
+if ((Test-Path .env) -and (@(Get-Content .env) -match '^COGVIDEO=on')) { $compose += @("--profile", "cogvideo") }
 
 if ($Llama) {
     $latest = "ghcr.io/ggml-org/llama.cpp:server-cuda13"   # keep equal to the tag in docker-compose.yml

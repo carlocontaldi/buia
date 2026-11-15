@@ -24,7 +24,7 @@ It generates text, images and videos, reads and writes your notes through file t
 mkdir $HOME\buia -Force; cd $HOME\buia
 git clone https://github.com/carlocontaldi/buia.git buia-core
 cd buia-core
-.\install.cmd              # add -Tailscale to expose it to your tailnet, -Sd for image/video generation
+.\install.cmd              # add -Tailscale to expose it to your tailnet, -Sd for image/video generation, -CogVideo for the CogVideoX video model
 ```
 
 `install.ps1` checks Docker and GPU access, creates `.env` from `.env.example` (with `BUIA_PATH` set to the folder
@@ -106,6 +106,25 @@ A generation keeps running if you close the page, the phone sleeps or you press 
 (reopen the chat to see it). The chat accepts the next message after that. Stop does not cancel the job itself.
 Every service keeps only its newest 60 MB of Docker logs (3 files of 20 MB). `docker compose logs sd | findstr /c:"compute buffer"` shows the buffer sizes of the last job.
 
+### CogVideoX 2B (optional second video engine)
+
+stable-diffusion.cpp cannot run CogVideoX, so `.\install.cmd -CogVideo` builds a separate `cogvideo` service (`cogvideo/`: Hugging Face Diffusers on
+PyTorch with CUDA; the image is several GB and the first build takes a while). It sets `COGVIDEO=on` in `.env`, which makes `update.cmd` rebuild it too.
+It does not need `-Sd`. Then, in **Models**:
+
+1. **Download** *CogVideoX 2B* (about 13.8 GB from `zai-org/CogVideoX-2b` into `sdmodels\CogVideoX-2b\`, checked against sha256 like the other presets), then **Use**.
+   From then on `generate_video` sends its jobs to the cogvideo service. **Use** on a Wan preset (or deleting CogVideoX) sends them back to `sd-video`, which is left alone
+   in between. Only one video model is in use at a time; image generation is not affected.
+2. The model has one format: **720x480, 49 frames at 8 fps (6 s)**, English prompts of at most 226 tokens. The assistant's `width`, `height` and `frames` arguments
+   are ignored for it; `steps` go from 10 to 50 (default 50, the model card's value).
+3. Each video runs in a fresh process, so the service holds no VRAM or RAM while idle. The 9.5 GB T5 text encoder runs on the CPU first and is freed, then the
+   3.4 GB transformer and the VAE take turns on the GPU. It therefore needs about 12 GB of free RAM inside Docker Desktop's WSL2 VM, which by default gets half of your RAM
+   (and the other containers share it). If a job ends with "killed: probably out of memory", raise `memory=` in `%UserProfile%\.wslconfig` (`[wsl2]` section) and run `wsl --shutdown`.
+4. **Not measured yet on the 8 GB laptop:** peak VRAM, RAM and the time per video (the timeout is 1 hour). Check it once with
+   `docker compose cp .\tools\sd_smoke.py agent:/tmp/sd_smoke.py` and
+   `docker compose exec -T -e SD_URL=http://cogvideo:1234 agent python /tmp/sd_smoke.py 720 480 49 10`, while
+   `docker compose logs -f cogvideo` shows `step i/N`. If it is too slow, give the assistant fewer steps or lower the default (`COG_DEFAULT_STEPS` in `agent/agent.py`).
+
 ## Security
 
 The web UI is protected by one password (`BUIA_PASSWORD` in `.env`): every API call except the login and the health check needs the session cookie that a login sets (HttpOnly, `SameSite=Strict`,
@@ -145,6 +164,17 @@ the agent runs on (`--upgrade` moves every pin to the newest version; without it
 docker run --rm -v "${PWD}/agent:/w" -w /w python:3.12-slim sh -c "pip install -q pip-tools && pip-compile -q --upgrade --generate-hashes --strip-extras requirements.in"
 docker compose up -d --build agent
 ```
+
+`cogvideo/requirements.txt` is a lock file of the same kind (PyTorch with its CUDA libraries, Diffusers, Transformers; Linux, Python 3.12). Regenerating it with pip-compile downloads
+every wheel, several GB, so give Docker room:
+
+```powershell
+docker run --rm -v "${PWD}/cogvideo:/w" -w /w python:3.12-slim sh -c "pip install -q pip-tools && pip-compile -q --upgrade --generate-hashes --strip-extras --allow-unsafe requirements.in"
+docker compose up -d --build cogvideo
+```
+
+(`--allow-unsafe` keeps `setuptools` in the file: torch needs it and `python:3.12-slim` does not ship it.) The file in the repo was generated from pip's resolution plus PyPI's hashes instead,
+and has not been built in Docker yet.
 
 The base image tag `python:3.12-slim` in `agent/Dockerfile` can still move on a rebuild. To freeze it, run the two commands in the comment at the top of
 the Dockerfile and replace the tag with the printed `python@sha256:...` value (the llama image is already pinned that way).
