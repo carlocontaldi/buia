@@ -405,13 +405,25 @@ def _sd_job(kind: str, body: dict, cog: bool = False) -> tuple[str, list]:
         if j["status"] == "completed":
             res = j["result"]
             if kind == "vid_gen":
-                data, detail = res["b64_json"], f"{res['frame_count']} frames at {res['fps']} fps, "
+                detail = f"{res['frame_count']} frames at {res['fps']} fps, "
+                if "result_url" in res:  # the cogvideo service: the finished file is downloaded, not embedded as base64
+                    url = str(res["result_url"])
+                    if not url.startswith("/"):  # only a path on the service that was asked, never another address
+                        return f"error: {label} job completed with an unusable result address ({url[:100]!r})", []
+                    try:
+                        dl = httpx.get(base + url, timeout=60)
+                        dl.raise_for_status()
+                    except httpx.HTTPError as e:
+                        return f"error: could not download the {label} from {base} ({type(e).__name__}: {e})", []
+                    raw = dl.content
+                else:
+                    raw = base64.b64decode(res["b64_json"])
             else:
-                data, detail = res["images"][0]["b64_json"], ""
+                raw, detail = base64.b64decode(res["images"][0]["b64_json"]), ""
             GENERATED.mkdir(parents=True, exist_ok=True)
             slug = re.sub(r"[^a-z0-9]+", "-", body["prompt"].lower())[:40].strip("-") or label
             path = GENERATED / f"{datetime.now(TZ).strftime('%Y%m%d-%H%M%S')}-{slug}.{res['output_format']}"
-            path.write_bytes(base64.b64decode(data))
+            path.write_bytes(raw)
             out = f"saved {rel(path)} ({detail}{body['width']}x{body['height']}, {time.time() - t0:.0f} s)"
             mime = MEDIA_MIME.get(res["output_format"])
             if not mime:  # e.g. avi: saved, but the browser cannot show it
