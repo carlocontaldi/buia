@@ -1,14 +1,15 @@
 """CogVideoX-2b behind the same small HTTP API the agent already uses for stable-diffusion.cpp's sd-server (only what the agent calls):
   GET  /sdcpp/v1/capabilities            -> {"supported_modes": ["vid_gen"], "model": {"stem": "CogVideoX-2b"}}
   POST /sdcpp/v1/vid_gen                 -> 202 {"poll_url": "/sdcpp/v1/jobs/<id>"}   (409 while another job runs)
-  GET  /sdcpp/v1/jobs/<id>               -> {"status": "running" | "completed" | "failed", "result": {...} | "error": "..."}
+  GET  /sdcpp/v1/jobs/<id>               -> {"status": "running" | "completed" | "failed", "result": {..., "result_url": ...} | "error": "..."}
+  GET  /sdcpp/v1/jobs/<id>/result        -> the finished video (video/webm); the result_url of a completed job
 Each job runs generate.py in a fresh process, so this server itself never touches the GPU and idles at no VRAM. No imports beyond the
 standard library on purpose: torch and diffusers are only loaded by the job.
 """
-import base64
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ HERE = Path(__file__).resolve().parent
 WIDTH, HEIGHT, FRAMES, FPS = 720, 480, 49, 8   # fixed by the model; same values as generate.py
 MIN_STEPS, MAX_STEPS, DEFAULT_STEPS = 1, 50, 50
 JOBS: dict[str, dict] = {}                     # id -> {"status", "result" | "error"}; only the newest few are kept
+JOB_FILES: dict[str, Path] = {}                # id -> finished video file in the temp folder; kept exactly as long as the job is
 LOCK = threading.Lock()
 
 
@@ -32,14 +34,18 @@ def run_job(jid: str, body: dict) -> None:
         rc = subprocess.run([sys.executable, str(HERE / "generate.py"), str(job_file)]).returncode
         err = Path(str(out) + ".error")
         if rc == 0 and out.exists():
-            result = {"output_format": "webm", "frame_count": FRAMES, "fps": FPS, "b64_json": base64.b64encode(out.read_bytes()).decode()}
-            JOBS[jid] = {"status": "completed", "result": result}
+            result = {"output_format": "webm", "frame_count": FRAMES, "fps": FPS, "result_url": f"/sdcpp/v1/jobs/{jid}/result"}
+            with LOCK:
+                JOB_FILES[jid] = out  # the file first: a poll that sees "completed" must find it
+                JOBS[jid] = {"status": "completed", "result": result}
         else:
             msg = err.read_text(encoding="utf-8") if err.exists() else f"the generation process ended with code {rc}" + \
                   (" (killed: probably out of memory, see README)" if rc in (-9, 137) else "")
             JOBS[jid] = {"status": "failed", "error": msg}
     finally:
-        for f in (out, job_file, Path(str(out) + ".error")):
+        if jid not in JOB_FILES:  # a finished video stays until its job is dropped from JOBS
+            out.unlink(missing_ok=True)
+        for f in (job_file, Path(str(out) + ".error")):
             f.unlink(missing_ok=True)
 
 
@@ -77,9 +83,32 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/sdcpp/v1/capabilities":
             return self.reply(200, {"supported_modes": ["vid_gen"], "model": {"stem": "CogVideoX-2b"}})
-        if self.path.startswith("/sdcpp/v1/jobs/") and (job := JOBS.get(self.path.rsplit("/", 1)[-1])):
-            return self.reply(200, job)
+        if self.path.startswith("/sdcpp/v1/jobs/"):
+            jid, _, tail = self.path[len("/sdcpp/v1/jobs/"):].partition("/")
+            if tail == "result":
+                return self.send_result(jid)
+            if not tail and (job := JOBS.get(jid)):
+                return self.reply(200, job)
         self.reply(404, {"error": "not found"})
+
+    def send_result(self, jid: str) -> None:
+        with LOCK:  # opened under the lock so that dropping the job cannot delete the file in between; the download runs outside it,
+            path = JOB_FILES.get(jid)  # so a client that stops reading cannot hold up the next job
+            try:
+                f = path.open("rb") if path else None
+            except OSError:
+                f = None
+        if not f:
+            return self.reply(404, {"error": "no video for this job"})
+        with f:
+            self.send_response(200)
+            self.send_header("Content-Type", "video/webm")
+            self.send_header("Content-Length", str(os.fstat(f.fileno()).st_size))
+            self.end_headers()
+            try:
+                shutil.copyfileobj(f, self.wfile, 64 * 1024)
+            except (BrokenPipeError, ConnectionResetError):  # the client left; nobody to tell
+                pass
 
     def do_POST(self):
         if self.path != "/sdcpp/v1/vid_gen":
@@ -95,8 +124,10 @@ class Handler(BaseHTTPRequestHandler):
             if any(j["status"] == "running" for j in JOBS.values()):
                 return self.reply(409, {"error": "a video is already being made; wait for it"})
             jid = uuid.uuid4().hex
-            for old in list(JOBS)[:-3]:  # keep the newest few results, they are megabytes of base64
+            for old in list(JOBS)[:-3]:  # keep the newest few results
                 del JOBS[old]
+                if old_file := JOB_FILES.pop(old, None):
+                    old_file.unlink(missing_ok=True)  # a download that already opened it keeps reading
             JOBS[jid] = {"status": "running"}
         threading.Thread(target=run_job, args=(jid, job), daemon=True).start()
         self.reply(202, {"id": jid, "poll_url": f"/sdcpp/v1/jobs/{jid}"})
