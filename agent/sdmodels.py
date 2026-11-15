@@ -11,8 +11,11 @@ which makes the agent send video jobs to the cogvideo service; "Use" on any othe
 """
 import asyncio
 import hashlib
+import json
 import os
+import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import quote
@@ -106,6 +109,189 @@ def put(path: Path, text: str) -> None:
         f.write(text + "\n")
     os.replace(tmp, path)
 
+
+# ---------- custom models from any Hugging Face repo (same families as the presets) ----------
+RESERVE_MB = 512
+REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# resident_mb: compute-buffer estimate when weights stream from disk; for CogVideoX it is added to transformer+VAE.
+TEMPLATES = {
+    "z-image-turbo":  {"model": 0, "pattern": r"z[_-]?image.*turbo.*\.(gguf|safetensors)$", "resident_mb": 3072, "basis": "estimate", "ref": "1024x1024"},
+    "wan21-t2v-1.3b": {"model": 0, "pattern": r"wan2\.1[_-]?t2v[_-]?1\.3b.*\.(gguf|safetensors)$", "resident_mb": 2560, "basis": "measured", "ref": "512x512, 33 frames"},
+    "wan22-ti2v-5b":  {"model": 0, "pattern": r"wan2\.2[_-]?ti2v[_-]?5b.*\.(gguf|safetensors)$", "resident_mb": 4096, "basis": "estimate", "ref": "720p, 24 fps"},
+    "cogvideox-2b":   {"model": None, "pattern": r"^model_index\.json$", "resident_mb": 1024, "basis": "estimate", "ref": "720x480, 49 frames"},
+}
+CUSTOM_FILE = SD_DIR / "custom.json"
+_VRAM = None
+_VRAM_LOCK = asyncio.Lock()
+
+def arg_value(args, flag):
+    m = re.search(rf"(?:^|\s){re.escape(flag)}\s+(\S+)", args or "")
+    return m.group(1) if m else None
+
+def backend_map(args, flag):
+    out = {}
+    for part in (arg_value(args, flag) or "").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip().lower()] = v.strip().lower()
+    return out
+
+def max_vram_mb(args):
+    m = re.search(r"(?:^|,)cuda0=([0-9.]+)([gGmM]?)", arg_value(args, "--max-vram") or "")
+    if not m:
+        return None
+    n = float(m.group(1))
+    return round(n) if m.group(2).lower() == "m" else round(n * 1024)
+
+async def vram_mb():
+    """GPU_VRAM_MB, else nvidia-smi; read off the event loop and cached (same sources as the chat fit check)."""
+    global _VRAM
+    async with _VRAM_LOCK:
+        if _VRAM is None:
+            try:
+                _VRAM = int(os.getenv("GPU_VRAM_MB") or 0)
+            except ValueError:
+                _VRAM = 0
+            if not _VRAM:
+                def read():
+                    try:
+                        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                                             capture_output=True, text=True, timeout=5)
+                        return int(out.stdout.strip().splitlines()[0])
+                    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+                        return 0
+                _VRAM = await asyncio.to_thread(read)
+    return _VRAM
+
+def fit_result(need_mb, vram, basis, ref):
+    if not need_mb or not vram:
+        return None
+    need = round(need_mb)
+    return {"need_mb": need, "vram_mb": vram, "fits": need <= vram - RESERVE_MB, "basis": basis, "ref": ref}
+
+def weights_mb(p, sizes, t):
+    if p.get("engine") == "cogvideo":
+        parts = [s for f, s in zip(p["files"], sizes)
+                 if s and dest(f).suffix == ".safetensors" and ("/transformer/" in dest(f).as_posix() or "/vae/" in dest(f).as_posix())]
+        return sum(parts) / MB if parts else None
+    s = sizes[t["model"]] if t["model"] is not None else None
+    return s / MB if s else None
+
+async def fit_for(p, sizes):
+    t = TEMPLATES.get(p.get("family") or p["id"])
+    if not t:
+        return None
+    vram = await vram_mb()
+    if p.get("engine") == "cogvideo":
+        mb = weights_mb(p, sizes, t)
+        return fit_result(mb + t["resident_mb"] if mb else None, vram, t["basis"], t["ref"])
+    args = p.get("args", "")
+    cap = max_vram_mb(args)
+    streamed = backend_map(args, "--params-backend").get("diffusion") == "disk"
+    if streamed:
+        need = cap if cap is not None else t["resident_mb"]
+        basis = "capped" if cap is not None else t["basis"]
+    else:
+        mb = weights_mb(p, sizes, t)
+        if mb is None:
+            return None
+        need = mb + t["resident_mb"]
+        if cap is not None:
+            need = min(need, cap)
+        basis = t["basis"]
+    return fit_result(need, vram, basis, t["ref"])
+
+def make_custom(repo, path, fam):
+    base, t = preset(fam), TEMPLATES[fam]
+    pid = re.sub(r"[^a-z0-9]+", "-", (repo + "-" + path).lower()).strip("-")[:60] + "-" + hashlib.sha1((repo + path).encode()).hexdigest()[:6]
+    if fam == "cogvideox-2b":
+        files = [(repo, f[1], f[2]) for f in base["files"]]  # keep the Diffusers folder layout the cogvideo service expects
+        args = ""
+    else:
+        files = list(base["files"])
+        old = files[t["model"]][1].rsplit("/", 1)[-1]
+        new = path.rsplit("/", 1)[-1]
+        rel = f"custom/{pid}/{new}"
+        files[t["model"]] = (repo, path, rel)
+        args = base["args"].replace(f"/models/{old}", f"/models/{rel}")
+    return {"id": pid, "kind": base["kind"], "name": f"{repo.rsplit('/', 1)[-1]} ({path.rsplit('/', 1)[-1]})",
+            "note": "Custom model from Hugging Face.", "files": files, "args": args, "family": fam, "custom": True,
+            **({"engine": base["engine"]} if base.get("engine") else {})}
+
+def inside_sd(d):
+    try:
+        return d.resolve().is_relative_to(SD_DIR.resolve())
+    except (OSError, RuntimeError):
+        return False
+
+def custom_ok(p):
+    if not isinstance(p, dict) or not p.get("custom") or p.get("family") not in TEMPLATES:
+        return False
+    if p.get("kind") not in ("image", "video") or not isinstance(p.get("args", ""), str):
+        return False
+    if not isinstance(p.get("id"), str) or not re.fullmatch(r"[a-z0-9-]+", p["id"]):
+        return False
+    files = p.get("files")
+    if not isinstance(files, list) or not files:
+        return False
+    for f in files:
+        if not isinstance(f, (list, tuple)) or len(f) not in (2, 3) or not all(isinstance(x, str) for x in f):
+            return False
+        if not REPO_RE.fullmatch(f[0]) or Path(f[1]).is_absolute() or ".." in Path(f[1]).parts:
+            return False
+        if len(f) > 2 and (Path(f[2]).is_absolute() or ".." in Path(f[2]).parts):
+            return False
+        if not inside_sd(dest(f)):
+            return False
+    return True
+
+def save_custom():
+    SD_DIR.mkdir(parents=True, exist_ok=True)
+    put(CUSTOM_FILE, json.dumps([p for p in PRESETS if p.get("custom") and custom_ok(p)], ensure_ascii=False))
+
+def load_custom():
+    try:
+        items = json.loads(CUSTOM_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(items, list):
+        return
+    known = {p["id"] for p in PRESETS}
+    for p in items:
+        if custom_ok(p) and p["id"] not in known:
+            PRESETS.append(p)
+            known.add(p["id"])
+
+load_custom()
+
+def clean_repo(repo):
+    repo = re.sub(r"^https?://huggingface\.co/", "", repo.strip())
+    repo = repo.split("/tree/", 1)[0].split("/resolve/", 1)[0].strip("/")
+    if not REPO_RE.fullmatch(repo):
+        raise HTTPException(400, "use a Hugging Face repo as owner/repo")
+    return repo
+
+def clean_path(path):
+    path = path.strip().strip("/")
+    if not path or "\\" in path or ".." in Path(path).parts:
+        raise HTTPException(400, "invalid file path")
+    return path
+
+async def fetch_tree(repo):
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=models._hf_headers()) as c:
+            r = await c.get(f"{models.HF}/api/models/{repo}/tree/main", params={"recursive": "true"})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Hugging Face unreachable: {e}")
+    if r.status_code in (401, 403):
+        raise HTTPException(403, f"{repo} is gated or private: set HF_TOKEN in .env")
+    if r.status_code == 404:
+        raise HTTPException(404, f"{repo} not found on Hugging Face")
+    r.raise_for_status()
+    return [it for it in r.json() if it.get("type") == "file"]
+
+async def repo_tree(repo):
+    return await models.cached(("sd-tree", repo), 600, lambda: fetch_tree(repo))
 
 def shared(p: dict, d: Path) -> bool:
     """True when another preset lists file d and has some other file on disk: deleting p must keep d (Wan 2.1 and 2.2 share the text encoder)."""
@@ -249,7 +435,12 @@ async def view(p: dict) -> dict:
     run = RUN.get(p["id"], {})
     left = None if total is None else sum(s for s, h in zip(sizes, have) if not h)
     free = shutil.disk_usage(SD_DIR).free // MB if SD_DIR.is_dir() else 0
-    return {"id": p["id"], "kind": p["kind"], "name": p["name"], "note": p["note"],
+    fit = await fit_for(p, sizes)
+    badge = ""
+    if fit:
+        word = "fits" if fit["fits"] else "may not fit"
+        badge = f" [{word} {fit['vram_mb'] // 1024} GB VRAM, {fit['basis']}]"
+    return {"id": p["id"], "kind": p["kind"], "name": p["name"] + badge, "note": p["note"], "fit": fit,
             "files": [{"name": dest(f).relative_to(SD_DIR).as_posix(), "have": h} for f, h in zip(p["files"], have)],
             "size_mb": None if total is None else round(total / MB), "ready": all(have), "active": all(have) and is_active(p),
             "state": run.get("state"), "done": run.get("done", 0), "total": run.get("total"), "message": run.get("message"),
@@ -306,6 +497,66 @@ async def api_use(body: IdBody):
     return {"ok": True}
 
 
+class RepoBody(BaseModel):
+    repo: str
+
+class AddBody(BaseModel):
+    repo: str
+    path: str
+
+@router.post("/check")
+async def api_check(body: RepoBody):
+    repo = clean_repo(body.repo)
+    tree = await repo_tree(repo)
+    paths = {it["path"] for it in tree}
+    size_by_path = {it["path"]: (it.get("lfs") or {}).get("size") or it.get("size") or 0 for it in tree}
+    out = []
+    for fam, t in TEMPLATES.items():
+        base = preset(fam)
+        if fam == "cogvideox-2b":
+            if not all(f[1] in paths for f in base["files"]):
+                continue
+            sizes = [size_by_path.get(f[1]) for f in base["files"]]
+            p = make_custom(repo, "model_index.json", fam)
+            variants = [{"path": "model_index.json", "size_mb": round(sum(s for s in sizes if s) / MB), "fit": await fit_for(p, sizes)}]
+        else:
+            rx = re.compile(t["pattern"], re.I)
+            variants = []
+            for it in tree:
+                if not rx.search(it["path"]):
+                    continue
+                size = size_by_path.get(it["path"]) or 0
+                sizes = [None] * len(base["files"])
+                sizes[t["model"]] = size
+                p = make_custom(repo, it["path"], fam)
+                variants.append({"path": it["path"], "size_mb": round(size / MB), "fit": await fit_for(p, sizes)})
+            if not variants:
+                continue
+        out.append({"family": fam, "kind": base["kind"], "name": base["name"], "variants": variants})
+    if not out:
+        raise HTTPException(400, "unsupported model family; supported: Z-Image Turbo, Wan 2.1 T2V 1.3B, Wan 2.2 TI2V 5B, CogVideoX-2b")
+    return {"repo": repo, "families": out}
+
+@router.post("/add")
+async def api_add(body: AddBody):
+    repo = clean_repo(body.repo)
+    path = clean_path(body.path)
+    tree = await repo_tree(repo)
+    paths = {it["path"] for it in tree}
+    if path not in paths:
+        raise HTTPException(404, f"{path} not found in {repo}")
+    fam = next((f for f, t in TEMPLATES.items()
+                if (f == "cogvideox-2b" and all(x[1] in paths for x in preset(f)["files"]))
+                or (f != "cogvideox-2b" and re.search(t["pattern"], path, re.I))), None)
+    if not fam:
+        raise HTTPException(400, "unsupported model family for that file")
+    p = make_custom(repo, path, fam)
+    if any(x["id"] == p["id"] for x in PRESETS):
+        raise HTTPException(409, "already added")
+    PRESETS.append(p)
+    save_custom()
+    return await view(p)
+
 @router.delete("/models")
 async def api_delete(id: str):
     p = preset(id)
@@ -329,4 +580,7 @@ async def api_delete(id: str):
             ENGINE_FILE.unlink(missing_ok=True)  # video jobs go back to the sd video server
     elif has_args(p):  # the server then goes back to SD_ARGS / SD_VIDEO_ARGS from .env
         active_file(p).unlink(missing_ok=True)
+    if p.get("custom"):
+        PRESETS.remove(p)
+        save_custom()
     return {"ok": True}

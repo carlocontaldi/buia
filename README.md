@@ -107,8 +107,11 @@ and builds the `sd` service from `docker-compose.yml`. The first build compiles 
 1. Open **Models**, scroll to **Image and video models**, click **Download** on a preset (Z-Image Turbo for images, Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video),
    then **Use**. Downloads come from Hugging Face into `sdmodels\`, resume after a cancel or a dropped connection, and are checked against
    their sha256. **Use** makes the sd server restart with that model a few seconds later (`sd-run.sh` watches `sdmodels\active-image.args`
-   and `active-video.args`). There is no fit check for these yet; the Wan 2.1 preset was measured at 512x512 with 33 frames on 8 GB, Wan 2.2 TI2V 5B not yet.
-   Only these presets can be downloaded: each model family needs its own set of files and flags.
+   and `active-video.args`). Each model shows a `fits` estimate from its flags: streamed sd presets use the resident compute-buffer estimate
+   (or `--max-vram` when set), not the file size; CogVideoX uses the transformer + VAE size. Unknown sizes show no badge. Wan 2.1 was measured
+   at 512x512 with 33 frames on 8 GB; Wan 2.2 TI2V 5B not yet. You can also check any Hugging Face repo of a supported family (Z-Image Turbo,
+   Wan 2.1 T2V 1.3B, Wan 2.2 TI2V 5B, CogVideoX-2b), pick a quant, and add it as a custom model with the preset's companion files and flags.
+   Customs are saved in `sdmodels\custom.json` and use the same Download / Use / Delete buttons.
    (Doing it by hand still works: put the files into `sdmodels\`, set `SD_ARGS` / `SD_VIDEO_ARGS` in `.env` as in `.env.example`, then
    `docker compose --profile sd up -d`. They apply while no model has been chosen with Use.)
 2. The sd server runs one model at a time: an image model cannot make videos and the other way round, which is why there are two servers.
@@ -136,7 +139,7 @@ It does not need `-Sd`. Then, in **Models**:
 3. Each video runs in a fresh process, so the service holds no VRAM or RAM while idle. The 9.5 GB T5 text encoder runs on the CPU first and is freed, then the
    3.4 GB transformer and the VAE take turns on the GPU. It therefore needs about 12 GB of free RAM inside Docker Desktop's WSL2 VM, which by default gets half of your RAM
    (and the other containers share it). If a job ends with "killed: probably out of memory", raise `memory=` in `%UserProfile%\.wslconfig` (`[wsl2]` section) and run `wsl --shutdown`.
-4. **Not measured yet on the 8 GB laptop:** peak VRAM, RAM and the time per video (the timeout is 1 hour). Check it once with
+4. **Measured on the 8 GB laptop:** about 215-250 s per video at 10 steps (720x480, 49 frames); peak VRAM and RAM not yet recorded (the timeout is 1 hour). Check it once with
    `docker compose cp .\tools\sd_smoke.py agent:/tmp/sd_smoke.py` and
    `docker compose exec -T -e SD_URL=http://cogvideo:1234 agent python /tmp/sd_smoke.py 720 480 49 10`, while
    `docker compose logs -f cogvideo` shows `step i/N`. If it is too slow, give the assistant fewer steps or lower the default (`COG_DEFAULT_STEPS` in `agent/agent.py`).
