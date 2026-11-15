@@ -29,8 +29,15 @@ while time.time() - t0 < 1800:
     if last == "completed":
         res = j["result"]
         path = f"{OUT}/sd_smoke.{res['output_format']}"
+        if "result_url" in res:  # cogvideo serves the video from its own URL on the same service (like the agent)
+            url = res["result_url"]
+            if not url.startswith("/"):
+                sys.exit(f"unusable result address: {url!r}")
+            data = httpx.get(SD + url, timeout=120).content
+        else:  # sd-server embeds the video as base64
+            data = base64.b64decode(res["b64_json"])
         with open(path, "wb") as f:
-            f.write(base64.b64decode(res["b64_json"]))
+            f.write(data)
         print(f"done in {time.time() - t0:.1f}s: {res['frame_count']} frames at {res['fps']} fps -> {path} ({os.path.getsize(path)} bytes)")
         sys.exit(0)
     if last in ("failed", "cancelled"):

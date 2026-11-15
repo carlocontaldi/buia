@@ -82,5 +82,7 @@ if __name__ == "__main__":
     try:
         run(job)
     except Exception as e:  # the server shows this message to the agent
-        Path(job["out"] + ".error").write_text(f"{type(e).__name__}: {e}"[:500], encoding="utf-8")
+        err = Path(job["out"] + ".error")
+        err.parent.mkdir(parents=True, exist_ok=True)
+        err.write_text(f"{type(e).__name__}: {e}"[:500], encoding="utf-8")
         sys.exit(1)
