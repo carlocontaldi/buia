@@ -34,13 +34,21 @@
       for (const f of j.families) for (const v of f.variants) {
         const row = document.createElement("div");
         row.style.cssText = "display:flex;gap:6px;align-items:center;margin:4px 0";
-        const fit = v.fit ? (v.fit.fits ? "fits " + Math.round(v.fit.vram_mb / 1024) + " GB" : "may not fit") : "fit unknown";
+        const word = {fits: "fits", tight: "tight", offload: "needs RAM offload", no: "may not fit"};
+        const fit = v.fit ? (word[v.fit.verdict] || "fit unknown") + " " + Math.round(v.fit.vram_mb / 1024) + " GB" : "fit unknown";
         const label = document.createElement("span");
         label.style.flex = "1";
-        label.textContent = f.name + " - " + v.path + " (" + v.size_mb + " MB) ";
+        label.textContent = f.name + " - " + v.path + " (" + v.size_mb + " MB" + (v.detail ? ", " + v.detail : "") + ") ";
         const i = document.createElement("i");
         i.textContent = fit;
+        if (v.fit) i.title = v.fit.reason + " Estimated for " + v.fit.ref + " (" + v.fit.basis + (v.fit.source ? ", weights from " + v.fit.source : "") + ").";
         label.appendChild(i);
+        if (v.warning) {
+          const w = document.createElement("div");
+          w.textContent = v.warning;
+          w.style.cssText = "font-size:.85em;opacity:.8";
+          label.appendChild(w);
+        }
         row.appendChild(label);
         const b = document.createElement("button");
         b.textContent = "Add";
@@ -54,6 +62,11 @@
         };
         row.appendChild(b);
         out.appendChild(row);
+      }
+      if (j.skipped) {
+        const n = document.createElement("div");
+        n.textContent = j.skipped + " more large .safetensors files were not checked (the largest 12 are read).";
+        out.appendChild(n);
       }
     } catch (e) { out.textContent = "error: " + e.message; }
   };

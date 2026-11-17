@@ -12,9 +12,11 @@ which makes the agent send video jobs to the cogvideo service; "Use" on any othe
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -72,6 +74,29 @@ PRESETS = [
          "vae/config.json", "vae/diffusion_pytorch_model.safetensors")]},
 ]
 
+# Template-only families (no download of their own): the companion files and flags that every model of the family needs, copied by
+# make_custom. Slot 0 of "files" is a placeholder for the model file. Flags follow stable-diffusion.cpp's docs/flux.md and docs/sd.md at the
+# pinned tag; they were not measured on the RTX 5050 laptop (the presets above were), and have no twin in .env.example.
+BASES = {
+    "flux1-schnell": {"id": "flux1-schnell", "kind": "image", "name": "FLUX.1 schnell",
+                      "note": "Text-to-image in 4 steps. The text encoders clip_l and T5-XXL (fp16, 9.8 GB) run on the CPU.",
+                      "files": [("leejet/FLUX.1-schnell-gguf", "flux1-schnell-q4_0.gguf"),
+                                ("comfyanonymous/flux_text_encoders", "clip_l.safetensors"),
+                                ("comfyanonymous/flux_text_encoders", "t5xxl_fp16.safetensors"),
+                                ("Comfy-Org/z_image_turbo", "split_files/vae/ae.safetensors")],
+                      "args": "--diffusion-model /models/flux1-schnell-q4_0.gguf --vae /models/ae.safetensors --clip_l /models/clip_l.safetensors "
+                              "--t5xxl /models/t5xxl_fp16.safetensors --cfg-scale 1.0 --steps 4 --diffusion-fa "
+                              "--backend clip=cpu,diffusion=CUDA0,vae=CUDA0 --params-backend te=cpu,diffusion=disk,vae=disk --lora-model-dir /models/loras"},
+    "sdxl": {"id": "sdxl", "kind": "image", "name": "SDXL checkpoint",
+             "note": "Single-file SDXL checkpoint (text encoders and VAE inside). Flags for a standard model: 25 steps, cfg 7.",
+             "files": [("owner/repo", "checkpoint.safetensors")],
+             "args": "-m /models/checkpoint.safetensors --cfg-scale 7.0 --steps 25 --diffusion-fa --vae-tiling --lora-model-dir /models/loras"},
+    "sd15": {"id": "sd15", "kind": "image", "name": "SD 1.x checkpoint",
+             "note": "Single-file Stable Diffusion 1.x checkpoint (text encoder and VAE inside). Flags for a standard model: 20 steps, cfg 7.",
+             "files": [("owner/repo", "checkpoint.safetensors")],
+             "args": "-m /models/checkpoint.safetensors --cfg-scale 7.0 --steps 20 --diffusion-fa --vae-tiling --lora-model-dir /models/loras"},
+}
+
 RUN: dict[str, dict] = {}  # preset id -> {"state": "downloading" | "failed", "done", "total", "message", "task"}; absent when idle
 
 
@@ -113,14 +138,25 @@ def put(path: Path, text: str) -> None:
 # ---------- custom models from any Hugging Face repo (same families as the presets) ----------
 RESERVE_MB = 512
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-# resident_mb: compute-buffer estimate when weights stream from disk; for CogVideoX it is added to transformer+VAE.
+# resident_mb: compute-buffer estimate when weights stream from disk; for CogVideoX and the checkpoint families it is added to the weights.
+# detect: a single-file checkpoint is recognised from the tensor names in its safetensors header (checkpoint_info), not from its file name.
+# The CogVideoX service reads one fixed folder, so another repo cannot sit next to the preset: it has a template (for its fit) but no customs.
 TEMPLATES = {
     "z-image-turbo":  {"model": 0, "pattern": r"z[_-]?image.*turbo.*\.(gguf|safetensors)$", "resident_mb": 3072, "basis": "estimate", "ref": "1024x1024"},
     "wan21-t2v-1.3b": {"model": 0, "pattern": r"wan2\.1[_-]?t2v[_-]?1\.3b.*\.(gguf|safetensors)$", "resident_mb": 2560, "basis": "measured", "ref": "512x512, 33 frames"},
     "wan22-ti2v-5b":  {"model": 0, "pattern": r"wan2\.2[_-]?ti2v[_-]?5b.*\.(gguf|safetensors)$", "resident_mb": 4096, "basis": "estimate", "ref": "720p, 24 fps"},
     "cogvideox-2b":   {"model": None, "pattern": r"^model_index\.json$", "resident_mb": 1024, "basis": "estimate", "ref": "720x480, 49 frames"},
+    "flux1-schnell":  {"model": 0, "pattern": r"flux[-_.]?1[-_.]?schnell.*\.gguf$", "resident_mb": 4096, "basis": "estimate", "ref": "768x768, 4 steps"},
+    "sdxl":           {"model": 0, "detect": True, "resident_mb": 2048, "basis": "estimate", "ref": "768x768"},
+    "sd15":           {"model": 0, "detect": True, "resident_mb": 1024, "basis": "estimate", "ref": "512x512"},
 }
 CUSTOM_FILE = SD_DIR / "custom.json"
+
+
+def base(fam):
+    """What a family's customs copy their companion files and flags from: the preset with that id, else the template-only base."""
+    return next((p for p in PRESETS if p["id"] == fam and not p.get("custom")), None) or BASES[fam]
+
 _VRAM = None
 _VRAM_LOCK = asyncio.Lock()
 
@@ -163,11 +199,40 @@ async def vram_mb():
                 _VRAM = await asyncio.to_thread(read)
     return _VRAM
 
-def fit_result(need_mb, vram, basis, ref):
+RAM_RESERVE_MB = 1536  # kept for the OS and the other containers, as in the chat fit check
+VERDICT_WORD = {"fits": "fits", "tight": "tight", "offload": "needs RAM offload", "no": "may not fit"}
+
+
+def read_ram_mb():
+    """MemAvailable from /proc/meminfo in MB; None when it cannot be read."""
+    try:
+        for ln in Path("/proc/meminfo").read_text().splitlines():
+            if ln.startswith("MemAvailable:"):
+                return int(ln.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def fit_result(need_mb, vram, basis, ref, ram_mb=None):
+    """Same four verdicts as the chat fit check (models.assess). need_mb is what the GPU holds during a job; sd.cpp moves what does not fit
+    to RAM or disk, so a verdict past 'tight' means slower, not impossible, until RAM runs out too."""
     if not need_mb or not vram:
         return None
-    need = round(need_mb)
-    return {"need_mb": need, "vram_mb": vram, "fits": need <= vram - RESERVE_MB, "basis": basis, "ref": ref}
+    need, usable = round(need_mb), vram - RESERVE_MB
+    over = need - usable
+    ram_room = None if ram_mb is None else max(0, ram_mb - RAM_RESERVE_MB)
+    if need <= 0.9 * usable:
+        v, why = "fits", "Fits in VRAM with room to spare."
+    elif need <= usable:
+        v, why = "tight", "Fits, but with little headroom: other GPU apps or a bigger image could break it."
+    elif ram_room is None:
+        v, why = "offload", "Does not fit in VRAM; sd.cpp keeps part of it in RAM or on disk (free RAM could not be read)."
+    elif over <= ram_room:
+        v, why = "offload", f"Does not fit in VRAM: about {round(over / 1024, 1)} GB would move to RAM. It runs, but slower."
+    else:
+        v, why = "no", f"Not enough VRAM + RAM (short by about {round((over - ram_room) / 1024, 1)} GB)."
+    return {"need_mb": need, "vram_mb": vram, "fits": need <= usable, "verdict": v, "reason": why, "basis": basis, "ref": ref}
 
 def weights_mb(p, sizes, t):
     if p.get("engine") == "cogvideo":
@@ -182,9 +247,10 @@ async def fit_for(p, sizes):
     if not t:
         return None
     vram = await vram_mb()
+    ram = await models.cached(("sd-ram",), 10, lambda: asyncio.to_thread(read_ram_mb))
     if p.get("engine") == "cogvideo":
         mb = weights_mb(p, sizes, t)
-        return fit_result(mb + t["resident_mb"] if mb else None, vram, t["basis"], t["ref"])
+        return fit_result(mb + t["resident_mb"] if mb else None, vram, t["basis"], t["ref"], ram)
     args = p.get("args", "")
     cap = max_vram_mb(args)
     streamed = backend_map(args, "--params-backend").get("diffusion") == "disk"
@@ -192,31 +258,31 @@ async def fit_for(p, sizes):
         need = cap if cap is not None else t["resident_mb"]
         basis = "capped" if cap is not None else t["basis"]
     else:
-        mb = weights_mb(p, sizes, t)
+        info = p.get("info")  # a checkpoint's weights, counted tensor by tensor from its safetensors header
+        mb = info["mb"] if info else weights_mb(p, sizes, t)
         if mb is None:
             return None
         need = mb + t["resident_mb"]
         if cap is not None:
             need = min(need, cap)
         basis = t["basis"]
-    return fit_result(need, vram, basis, t["ref"])
+    res = fit_result(need, vram, basis, t["ref"], ram)
+    if res and not streamed:
+        res["source"] = "header" if p.get("info") else "file size"
+    return res
 
-def make_custom(repo, path, fam):
-    base, t = preset(fam), TEMPLATES[fam]
+def make_custom(repo, path, fam, info=None):
+    b, t = base(fam), TEMPLATES[fam]
     pid = re.sub(r"[^a-z0-9]+", "-", (repo + "-" + path).lower()).strip("-")[:60] + "-" + hashlib.sha1((repo + path).encode()).hexdigest()[:6]
-    if fam == "cogvideox-2b":
-        files = [(repo, f[1], f[2]) for f in base["files"]]  # keep the Diffusers folder layout the cogvideo service expects
-        args = ""
-    else:
-        files = list(base["files"])
-        old = files[t["model"]][1].rsplit("/", 1)[-1]
-        new = path.rsplit("/", 1)[-1]
-        rel = f"custom/{pid}/{new}"
-        files[t["model"]] = (repo, path, rel)
-        args = base["args"].replace(f"/models/{old}", f"/models/{rel}")
-    return {"id": pid, "kind": base["kind"], "name": f"{repo.rsplit('/', 1)[-1]} ({path.rsplit('/', 1)[-1]})",
+    files = list(b["files"])
+    old = files[t["model"]][1].rsplit("/", 1)[-1]
+    new = path.rsplit("/", 1)[-1]
+    rel = f"custom/{pid}/{new}"
+    files[t["model"]] = (repo, path, rel)
+    args = b["args"].replace(f"/models/{old}", f"/models/{rel}")
+    return {"id": pid, "kind": b["kind"], "name": f"{repo.rsplit('/', 1)[-1]} ({new})",
             "note": "Custom model from Hugging Face.", "files": files, "args": args, "family": fam, "custom": True,
-            **({"engine": base["engine"]} if base.get("engine") else {})}
+            **({"info": info} if info else {})}
 
 def inside_sd(d):
     try:
@@ -225,7 +291,10 @@ def inside_sd(d):
         return False
 
 def custom_ok(p):
-    if not isinstance(p, dict) or not p.get("custom") or p.get("family") not in TEMPLATES:
+    if not isinstance(p, dict) or not p.get("custom") or p.get("family") not in TEMPLATES or p.get("engine"):
+        return False
+    info = p.get("info")
+    if info is not None and not (isinstance(info, dict) and isinstance(info.get("mb"), (int, float)) and not isinstance(info["mb"], bool)):
         return False
     if p.get("kind") not in ("image", "video") or not isinstance(p.get("args", ""), str):
         return False
@@ -292,6 +361,95 @@ async def fetch_tree(repo):
 
 async def repo_tree(repo):
     return await models.cached(("sd-tree", repo), 600, lambda: fetch_tree(repo))
+
+
+# ---------- single-file checkpoints (SD 1.x, SDXL): recognised and sized from the safetensors header ----------
+# The rules follow stable-diffusion.cpp's own version detection (src/model_loader.cpp) for the A1111 tensor layout.
+TOKEN_EMB = ("cond_stage_model.transformer.text_model.embeddings.token_embedding.weight", "cond_stage_model.model.token_embedding.weight",
+             "conditioner.embedders.0.model.token_embedding.weight", "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight")
+CKPT_SKIP = re.compile(r"(^|/)(vae|text_encoder\d*|unet|transformer|safety_checker|controlnet|loras?|embeddings)/", re.I)
+CKPT_MIN_MB, CKPT_MAX_FILES, ST_HEADER_MAX = 1024, 12, 16 << 20
+DISTILLED = re.compile(r"turbo|lightning|lcm|hyper|dmd|distill", re.I)
+
+
+def checkpoint_info(header):
+    """Family and exact weight sizes of a text-to-image checkpoint, from the JSON header of a .safetensors file; None for anything else
+    (Diffusers folders, inpaint/pix2pix models, diffusion-only files, tiny or SD 2.x models, other architectures)."""
+    t = {k: v for k, v in header.items() if k != "__metadata__" and isinstance(v, dict) and isinstance(v.get("shape"), list)}
+    conv, tok = t.get("model.diffusion_model.input_blocks.0.0.weight"), next((t[n] for n in TOKEN_EMB if n in t), None)
+    if not conv or not tok or len(conv["shape"]) != 4 or conv["shape"][1] != 4 or len(tok["shape"]) != 2:
+        return None
+    if not any(n.startswith("model.diffusion_model.middle_block.1.") for n in t):
+        return None
+    if any(n.startswith("conditioner.embedders.1.") for n in t):
+        fam = "sdxl"
+    elif tok["shape"][1] == 768:
+        fam = "sd15"
+    else:
+        return None
+    parts, params, dtypes = {"diffusion": 0, "te": 0, "vae": 0, "other": 0}, 0, {}
+    for n, v in t.items():
+        try:
+            elems = math.prod(int(x) for x in v["shape"])
+            lo, hi = v["data_offsets"]
+            size = int(hi) - int(lo)
+        except (KeyError, TypeError, ValueError):
+            return None
+        part = ("diffusion" if n.startswith("model.diffusion_model.") else "te" if n.startswith(("cond_stage_model.", "conditioner."))
+                else "vae" if n.startswith("first_stage_model.") else "other")
+        parts[part] += size
+        params += elems
+        dtypes[v.get("dtype", "?")] = dtypes.get(v.get("dtype", "?"), 0) + elems
+    return {"family": fam, "params": params, "dtype": max(dtypes, key=dtypes.get), "mb": round(sum(parts.values()) / MB),
+            "parts_mb": {k: round(b / MB) for k, b in parts.items()}}
+
+
+async def fetch_head(c, url, n):
+    buf = bytearray()
+    async with c.stream("GET", url, headers={"Range": f"bytes=0-{n - 1}"}) as r:
+        r.raise_for_status()
+        async for chunk in r.aiter_bytes():
+            buf += chunk
+            if len(buf) >= n:
+                break  # a server that ignores Range must not make us read the whole file
+    return bytes(buf[:n])
+
+
+async def read_checkpoint(repo, path):
+    url = f"{models.HF}/{repo}/resolve/main/{quote(path)}"
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=models._hf_headers()) as c:
+        buf = await fetch_head(c, url, 1 << 20)
+        if len(buf) < 8:
+            raise ValueError("not a safetensors file")
+        n = struct.unpack("<Q", buf[:8])[0]
+        if not 2 <= n <= ST_HEADER_MAX:
+            raise ValueError("unreasonable safetensors header")
+        if len(buf) < 8 + n:
+            buf = await fetch_head(c, url, 8 + n)
+        if len(buf) < 8 + n:
+            raise ValueError("truncated safetensors header")
+    header = json.loads(buf[8:8 + n])
+    return checkpoint_info(header) if isinstance(header, dict) else None
+
+
+async def checkpoint_of(repo, path):
+    """checkpoint_info of one file in a repo (a Range request for its header, cached); None when it is not a supported checkpoint or unreadable."""
+    try:
+        return await models.cached(("sd-st", repo, path), 3600, lambda: read_checkpoint(repo, path))
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+def checkpoint_candidate(path, size):
+    return path.lower().endswith(".safetensors") and size >= CKPT_MIN_MB * MB and not CKPT_SKIP.search(path)
+
+
+async def find_checkpoints(repo, size_by_path):
+    """{path: checkpoint_info} for the checkpoints in a repo, and how many candidate files were left unchecked (the largest 12 are read)."""
+    cand = sorted((x for x, size in size_by_path.items() if checkpoint_candidate(x, size)), key=lambda x: -size_by_path[x])
+    todo = cand[:CKPT_MAX_FILES]
+    heads = await asyncio.gather(*(checkpoint_of(repo, x) for x in todo))
+    return {x: h for x, h in zip(todo, heads) if h}, len(cand) - len(todo)
 
 def shared(p: dict, d: Path) -> bool:
     """True when another preset lists file d and has some other file on disk: deleting p must keep d (Wan 2.1 and 2.2 share the text encoder)."""
@@ -438,8 +596,7 @@ async def view(p: dict) -> dict:
     fit = await fit_for(p, sizes)
     badge = ""
     if fit:
-        word = "fits" if fit["fits"] else "may not fit"
-        badge = f" [{word} {fit['vram_mb'] // 1024} GB VRAM, {fit['basis']}]"
+        badge = f" [{VERDICT_WORD[fit['verdict']]}, {fit['vram_mb'] // 1024} GB VRAM, {fit['basis']}]"
     return {"id": p["id"], "kind": p["kind"], "name": p["name"] + badge, "note": p["note"], "fit": fit,
             "files": [{"name": dest(f).relative_to(SD_DIR).as_posix(), "have": h} for f, h in zip(p["files"], have)],
             "size_mb": None if total is None else round(total / MB), "ready": all(have), "active": all(have) and is_active(p),
@@ -504,53 +661,58 @@ class AddBody(BaseModel):
     repo: str
     path: str
 
+def size_map(tree):
+    return {it["path"]: (it.get("lfs") or {}).get("size") or it.get("size") or 0 for it in tree}
+
+
 @router.post("/check")
 async def api_check(body: RepoBody):
     repo = clean_repo(body.repo)
-    tree = await repo_tree(repo)
-    paths = {it["path"] for it in tree}
-    size_by_path = {it["path"]: (it.get("lfs") or {}).get("size") or it.get("size") or 0 for it in tree}
+    size_by_path = size_map(await repo_tree(repo))
+    found, skipped = await find_checkpoints(repo, size_by_path)
     out = []
     for fam, t in TEMPLATES.items():
-        base = preset(fam)
-        if fam == "cogvideox-2b":
-            if not all(f[1] in paths for f in base["files"]):
-                continue
-            sizes = [size_by_path.get(f[1]) for f in base["files"]]
-            p = make_custom(repo, "model_index.json", fam)
-            variants = [{"path": "model_index.json", "size_mb": round(sum(s for s in sizes if s) / MB), "fit": await fit_for(p, sizes)}]
+        b = base(fam)
+        if b.get("engine"):
+            continue
+        if t.get("detect"):
+            hits = [(path, info) for path, info in found.items() if info["family"] == fam]
         else:
             rx = re.compile(t["pattern"], re.I)
-            variants = []
-            for it in tree:
-                if not rx.search(it["path"]):
-                    continue
-                size = size_by_path.get(it["path"]) or 0
-                sizes = [None] * len(base["files"])
-                sizes[t["model"]] = size
-                p = make_custom(repo, it["path"], fam)
-                variants.append({"path": it["path"], "size_mb": round(size / MB), "fit": await fit_for(p, sizes)})
-            if not variants:
-                continue
-        out.append({"family": fam, "kind": base["kind"], "name": base["name"], "variants": variants})
+            hits = [(path, None) for path in size_by_path if rx.search(path)]
+        variants = []
+        for path, info in hits:
+            size = size_by_path[path]
+            sizes = [None] * len(b["files"])
+            sizes[t["model"]] = size
+            v = {"path": path, "size_mb": round(size / MB), "fit": await fit_for(make_custom(repo, path, fam, info), sizes)}
+            if info:
+                v["detail"] = f"{info['dtype']}, {info['params'] / 1e9:.1f}B parameters"
+                if DISTILLED.search(path):
+                    v["warning"] = "Looks like a distilled model: it needs fewer steps and a lower cfg than these flags use (25 steps, cfg 7)."
+            variants.append(v)
+        if variants:
+            out.append({"family": fam, "kind": b["kind"], "name": b["name"], "variants": variants})
     if not out:
-        raise HTTPException(400, "unsupported model family; supported: Z-Image Turbo, Wan 2.1 T2V 1.3B, Wan 2.2 TI2V 5B, CogVideoX-2b")
-    return {"repo": repo, "families": out}
+        names = ", ".join(re.sub(r" \(.*\)$", "", base(f)["name"]) for f, t in TEMPLATES.items() if not base(f).get("engine"))
+        raise HTTPException(400, f"unsupported model family; supported: {names}")
+    return {"repo": repo, "families": out, "skipped": skipped}
 
 @router.post("/add")
 async def api_add(body: AddBody):
     repo = clean_repo(body.repo)
     path = clean_path(body.path)
-    tree = await repo_tree(repo)
-    paths = {it["path"] for it in tree}
-    if path not in paths:
+    size_by_path = size_map(await repo_tree(repo))
+    if path not in size_by_path:
         raise HTTPException(404, f"{path} not found in {repo}")
-    fam = next((f for f, t in TEMPLATES.items()
-                if (f == "cogvideox-2b" and all(x[1] in paths for x in preset(f)["files"]))
-                or (f != "cogvideox-2b" and re.search(t["pattern"], path, re.I))), None)
+    fam, info = next(((f, None) for f, t in TEMPLATES.items()
+                      if not t.get("detect") and not base(f).get("engine") and re.search(t["pattern"], path, re.I)), (None, None))
+    if not fam and checkpoint_candidate(path, size_by_path[path]):
+        info = await checkpoint_of(repo, path)
+        fam = info["family"] if info else None
     if not fam:
         raise HTTPException(400, "unsupported model family for that file")
-    p = make_custom(repo, path, fam)
+    p = make_custom(repo, path, fam, info)
     if any(x["id"] == p["id"] for x in PRESETS):
         raise HTTPException(409, "already added")
     PRESETS.append(p)
