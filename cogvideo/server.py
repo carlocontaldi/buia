@@ -2,6 +2,7 @@
   GET  /sdcpp/v1/capabilities            -> {"supported_modes": ["vid_gen"], "model": {"stem": "CogVideoX-2b"}}
   POST /sdcpp/v1/vid_gen                 -> 202 {"poll_url": "/sdcpp/v1/jobs/<id>"}   (409 while another job runs)
   GET  /sdcpp/v1/jobs/<id>               -> {"status": "running" | "completed" | "failed", "result": {..., "result_url": ...} | "error": "..."}
+                                            a running job also has "progress": {"phase": "text" | "loading" | "sampling" | "decoding" | "saving", "step": i, "steps": N}
   GET  /sdcpp/v1/jobs/<id>/result        -> the finished video (video/webm); the result_url of a completed job
 Each job runs generate.py in a fresh process, so this server itself never touches the GPU and idles at no VRAM. No imports beyond the
 standard library on purpose: torch and diffusers are only loaded by the job.
@@ -21,6 +22,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 WIDTH, HEIGHT, FRAMES, FPS = 720, 480, 49, 8   # fixed by the model; same values as generate.py
 MIN_STEPS, MAX_STEPS, DEFAULT_STEPS = 1, 50, 50
+MIN_GUIDANCE, MAX_GUIDANCE, DEFAULT_GUIDANCE = 1.0, 20.0, 6.0   # the default is the model card's value, same as generate.py
+MAX_NEGATIVE = 2000                            # characters
 JOBS: dict[str, dict] = {}                     # id -> {"status", "result" | "error"}; only the newest few are kept
 JOB_FILES: dict[str, Path] = {}                # id -> finished video file in the temp folder; kept exactly as long as the job is
 LOCK = threading.Lock()
@@ -45,8 +48,17 @@ def run_job(jid: str, body: dict) -> None:
     finally:
         if jid not in JOB_FILES:  # a finished video stays until its job is dropped from JOBS
             out.unlink(missing_ok=True)
-        for f in (job_file, Path(str(out) + ".error")):
+        for f in (job_file, Path(str(out) + ".error"), Path(str(out) + ".progress"), Path(str(out) + ".progress.tmp")):
             f.unlink(missing_ok=True)
+
+
+def read_progress(jid: str) -> dict | None:
+    """What generate.py last reported for a running job, or None (not started yet, or unreadable)."""
+    try:
+        p = json.loads((Path(tempfile.gettempdir()) / f"{jid}.webm.progress").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return p if isinstance(p, dict) else None
 
 
 def check(req: dict) -> tuple[dict | None, str]:
@@ -65,10 +77,20 @@ def check(req: dict) -> tuple[dict | None, str]:
     steps = (sample_params or {}).get("sample_steps", DEFAULT_STEPS)
     if not isinstance(steps, int) or not MIN_STEPS <= steps <= MAX_STEPS:
         return None, f"sample_steps must be an integer from {MIN_STEPS} to {MAX_STEPS}"
+    negative = req.get("negative_prompt", "")
+    if not isinstance(negative, str) or len(negative) > MAX_NEGATIVE:
+        return None, f"negative_prompt must be text of at most {MAX_NEGATIVE} characters"
+    guidance_params = (sample_params or {}).get("guidance")
+    if guidance_params is not None and not isinstance(guidance_params, dict):
+        return None, "sample_params.guidance must be an object"
+    guidance = (guidance_params or {}).get("txt_cfg", DEFAULT_GUIDANCE)
+    if isinstance(guidance, bool) or not isinstance(guidance, (int, float)) or not MIN_GUIDANCE <= guidance <= MAX_GUIDANCE:
+        return None, f"guidance.txt_cfg must be a number from {MIN_GUIDANCE} to {MAX_GUIDANCE}"
     seed = req.get("seed", -1)
     if not isinstance(seed, int):
         return None, "seed must be an integer"
-    return {"prompt": prompt.strip(), "steps": steps, "seed": seed if seed >= 0 else random.randrange(2**32)}, ""
+    return {"prompt": prompt.strip(), "negative": negative.strip(), "guidance": float(guidance), "steps": steps,
+            "seed": seed if seed >= 0 else random.randrange(2**32)}, ""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -88,6 +110,8 @@ class Handler(BaseHTTPRequestHandler):
             if tail == "result":
                 return self.send_result(jid)
             if not tail and (job := JOBS.get(jid)):
+                if job["status"] == "running" and (progress := read_progress(jid)):
+                    job = job | {"progress": progress}
                 return self.reply(200, job)
         self.reply(404, {"error": "not found"})
 

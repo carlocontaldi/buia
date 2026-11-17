@@ -13,6 +13,7 @@ import re
 import secrets
 import socket
 import tempfile
+import threading
 import time
 from contextlib import aclosing
 from datetime import datetime
@@ -26,6 +27,7 @@ import auth
 import httpx
 import models
 import sdmodels
+import videogen
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -380,9 +382,10 @@ MEDIA_RE = re.compile(r"\d{8}-\d{6}-[a-z0-9-]+\.(?:png|webp|webm)")
 MEDIA_TOOLS = ("generate_image", "generate_video")  # tools whose result is shown in the chat
 
 
-def _sd_job(kind: str, body: dict, cog: bool = False) -> tuple[str, list]:
+def _sd_job(kind: str, body: dict, cog: bool = False, on_poll=None) -> tuple[str, list]:
     """Run one job on sd-server (kind: img_gen or vid_gen), or on the cogvideo service (cog=True), which speaks the same API.
-    Returns (text for the model, media entries for the chat UI)."""
+    Returns (text for the model, media entries for the chat UI). on_poll(job), when given, sees every answer of the server while it works
+    (the Video panel's progress bar); the chat tools do not use it."""
     label = "video" if kind == "vid_gen" else "image"
     base = sdmodels.COG_URL if cog else SD_VIDEO_URL if kind == "vid_gen" else SD_URL
     timeout = COG_TIMEOUT if cog else VIDEO_TIMEOUT
@@ -402,6 +405,8 @@ def _sd_job(kind: str, body: dict, cog: bool = False) -> tuple[str, list]:
     poll_url = r.json()["poll_url"]
     while time.time() - t0 < timeout:
         j = httpx.get(base + poll_url, timeout=30).json()
+        if on_poll:
+            on_poll(j)
         if j["status"] == "completed":
             res = j["result"]
             if kind == "vid_gen":
@@ -432,7 +437,7 @@ def _sd_job(kind: str, body: dict, cog: bool = False) -> tuple[str, list]:
                 [{"kind": label, "url": f"/api/media/{path.name}", "mime": mime, "prompt": body["prompt"]}]
         if j["status"] in ("failed", "cancelled"):
             return f"error: {label} job {j['status']}: {j.get('error')}", []
-        time.sleep(2)
+        time.sleep(1 if on_poll else 2)
     return f"error: {label} job not finished after {timeout} s (the server may still be working on it)", []
 
 
@@ -468,6 +473,67 @@ def generate_image(prompt: str, width: int = 512, height: int = 512, seed: int =
     # no steps / cfg here: distilled models need specific values, which belong in the sd server's own arguments (SD_ARGS)
     body = {"prompt": prompt, "width": width, "height": height, "seed": seed, "output_format": "png"}
     return _sd_job("img_gen", body)
+
+
+# ---------- the Video panel: the same video jobs as generate_video, started from a form, with a progress bar ----------
+SD_LOG_DIR = Path(os.getenv("SD_LOG_DIR", "/sdlogs"))  # the sdlogs volume, read-only: sd-run.sh copies sd-server's output there (it has the sampling steps)
+VIDEO_CAPS = {"side": VIDEO_MAX_SIDE, "frames": VIDEO_MAX_FRAMES, "steps": VIDEO_MAX_STEPS,  # the limits generate_video uses, for the form too
+              "cog_steps": COG_STEPS, "cog_default_steps": COG_DEFAULT_STEPS, "cog_format": COG_FORMAT}
+VIDEO_JOBS: dict[str, dict] = {}  # id -> what the panel shows; the newest few. Only the thread running a job and VIDEO_LOCK change an entry.
+VIDEO_LOCK = threading.Lock()
+VIDEO_KEEP = 5
+
+
+def video_busy() -> bool:
+    with VIDEO_LOCK:
+        return any(j["state"] == "running" for j in VIDEO_JOBS.values())
+
+
+def video_engine() -> str:
+    return "cogvideo" if sdmodels.cog_active() else "sd"
+
+
+def video_view(job: dict) -> dict:
+    """The job as the panel gets it. Called with VIDEO_LOCK held."""
+    out = {k: job.get(k) for k in ("id", "state", "phase", "step", "steps", "percent", "queue", "seed", "prompt", "error", "result", "saved")}
+    out["elapsed"] = round((job.get("finished") or time.time()) - job["started"])
+    return out
+
+
+def run_video_job(job: dict, engine: str, body: dict) -> None:
+    tail = None if engine == "cogvideo" else videogen.LogTail(SD_LOG_DIR / videogen.LOG_NAME)  # made before the job starts: only its output counts
+    sd_progress = videogen.SdProgress()
+
+    def on_poll(j: dict) -> None:
+        try:
+            if j.get("status") == "queued":
+                phase, step, steps = "queued", 0, 0
+            elif engine == "cogvideo":
+                p = j.get("progress") or {}
+                phase, step, steps = p.get("phase"), p.get("step", 0), p.get("steps", 0)
+                if phase not in videogen.SHARE or not isinstance(step, int) or not isinstance(steps, int):
+                    phase, step, steps = "starting", 0, 0
+            elif tail.exists():
+                sd_progress.feed(tail.read())
+                phase, step, steps = sd_progress.snapshot()
+            else:  # no log volume: the server works, only its steps cannot be seen
+                phase, step, steps = "running", 0, 0
+            with VIDEO_LOCK:
+                job.update(phase=phase, step=step, steps=steps, queue=j.get("queue_position") or 0,
+                           percent=videogen.percent(phase, step, steps) if phase in videogen.SHARE else None)
+        except Exception:  # the bar is only information: it must never cost the video
+            pass
+
+    try:
+        text, media = _sd_job("vid_gen", body, cog=engine == "cogvideo", on_poll=on_poll)
+    except Exception as e:  # a thread that dies silently leaves a job that never ends
+        text, media = f"error: {type(e).__name__}: {e}", []
+    with VIDEO_LOCK:
+        job["finished"] = time.time()
+        if media:
+            job.update(state="done", phase="done", percent=100, result=media[0], saved=text.split(". It is already shown", 1)[0])
+        else:
+            job.update(state="error", phase="error", error=text.removeprefix("error: "))
 
 
 IMPL = {f.__name__: f for f in (list_dir, read_file, search_files, write_file, append_file, generate_video, generate_image)}
@@ -881,6 +947,70 @@ def delete_chat(cid: str):
     return {"ok": True}
 
 
+class VideoAsk(BaseModel):
+    model: str = ""  # a video preset id from the Models panel; empty = whatever the video server runs now
+    values: dict     # the form: prompt, negative_prompt and the fields of videogen.fields for that engine
+
+
+VIDEO_NOTES = {
+    "cogvideo": f"The model fixes the format: {COG_FORMAT[0]}x{COG_FORMAT[1]}, {COG_FORMAT[2]} frames at 8 fps (6 s). English prompts, up to 226 tokens.",
+    "sd": f"Size, frames and steps stop at what was measured on the 8 GB GPU ({VIDEO_MAX_SIDE}x{VIDEO_MAX_SIDE}, {VIDEO_MAX_FRAMES} frames, "
+          f"{VIDEO_MAX_STEPS} steps). An empty optional field keeps what the model was started with."}
+
+
+@app.get("/api/video/params")
+def video_params(model: str = ""):
+    """The form of one model: its engine and the parameters it takes (the defaults are what generate_video uses)."""
+    engine, args = video_engine(), ""
+    if model:
+        p = sdmodels.preset(model)
+        if p["kind"] != "video":
+            raise HTTPException(404, "not a video model")
+        engine, args = ("cogvideo" if p.get("engine") == "cogvideo" else "sd"), p.get("args", "")
+    hints = {k: v for k, v in (("cfg_scale", sdmodels.arg_value(args, "--cfg-scale")), ("sampler", sdmodels.arg_value(args, "--sampling-method")),
+                               ("flow_shift", sdmodels.arg_value(args, "--flow-shift"))) if v}
+    return {"engine": engine, "note": VIDEO_NOTES[engine], "fields": videogen.fields(engine, VIDEO_CAPS, hints)}
+
+
+@app.post("/api/video/jobs")
+def video_start(body: VideoAsk):
+    engine = video_engine()
+    if body.model:
+        p = sdmodels.preset(body.model)  # 404 for an unknown id
+        if p["kind"] != "video" or not sdmodels.is_active(p):
+            raise HTTPException(409, "that model is not in use: choose Use for it in the list and wait for the video server to restart")
+    try:
+        job_body = videogen.build_body(engine, body.values, VIDEO_CAPS)
+    except videogen.BadValue as e:
+        raise HTTPException(400, str(e)) from None
+    with VIDEO_LOCK:
+        if JOBS or any(j["state"] == "running" for j in VIDEO_JOBS.values()):  # one GPU
+            raise HTTPException(409, "an image or video is already being generated; wait for it to finish")
+        job = {"id": secrets.token_hex(4), "state": "running", "phase": "starting", "step": 0, "steps": 0, "percent": 0, "queue": 0,
+               "seed": job_body["seed"], "prompt": job_body["prompt"], "started": time.time()}
+        VIDEO_JOBS[job["id"]] = job
+        for old in list(VIDEO_JOBS)[:-VIDEO_KEEP]:
+            del VIDEO_JOBS[old]
+        view = video_view(job)
+    threading.Thread(target=run_video_job, args=(job, engine, job_body), daemon=True).start()
+    return view
+
+
+@app.get("/api/video/jobs")
+def video_jobs():
+    """The newest jobs first, so that the panel can pick up a running one after a reload."""
+    with VIDEO_LOCK:
+        return [video_view(j) for j in reversed(VIDEO_JOBS.values())]
+
+
+@app.get("/api/video/jobs/{jid}")
+def video_job(jid: str):
+    with VIDEO_LOCK:
+        if jid not in VIDEO_JOBS:
+            raise HTTPException(404, "no such job")
+        return video_view(VIDEO_JOBS[jid])
+
+
 @app.get("/api/media/{name}")
 def get_media(name: str):
     if not MEDIA_RE.fullmatch(name):  # names are made by _sd_job; also blocks path traversal
@@ -896,7 +1026,7 @@ def chat_turn(body: Ask):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "empty message")
-    if JOBS:  # one GPU: the chat model loading next to a running image/video job can run either out of VRAM
+    if JOBS or video_busy():  # one GPU: the chat model loading next to a running image/video job can run either out of VRAM
         raise HTTPException(409, "an image or video is being generated and the GPU is busy; wait for it to finish")
     chat = new_chat()
     if body.chat_id:

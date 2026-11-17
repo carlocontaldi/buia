@@ -36,7 +36,7 @@
   button { font: inherit; border: 0; border-radius: 8px; padding: 8px 14px; background: var(--accent); color: var(--accent-fg); }
   button.plain { background: none; color: var(--mute); padding: 4px 8px; }
   #stop { background: #dc2626; color: #fff; }
-  #panel, #mpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
+  #panel, #mpanel, #vpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
   h3 { margin: 14px 0 6px; font-size: 14px; }
   .muted { font-size: 12px; color: var(--mute); margin: 2px 0; }
   .bad { color: #dc2626; font-size: 12px; }
@@ -57,6 +57,14 @@
   #theme { font: inherit; font-size: 14px; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 6px; }
   #login { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; background: var(--bg); }
   #pw { width: min(320px, 100%); font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }
+  /* Video panel: a form made from the model's parameters, a progress bar while a video is made */
+  .vin { width: 100%; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 6px 8px; }
+  .vf { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px 12px; margin: 8px 0; }
+  .vf label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--mute); }
+  .vf .wide { grid-column: 1 / -1; }
+  .vf small { font-size: 11px; opacity: .85; }
+  #vbar { width: 100%; flex: none; height: 14px; }
+  :root:not([data-theme="buia"]) #vgo:disabled { opacity: .5; cursor: not-allowed; }  /* the BUIA theme styles disabled buttons itself */
   [hidden] { display: none !important; }
   /* Logo pieces: hidden in every theme but BUIA (the login logo is shown in all). */
   .brand, #welcome { display: none; }
@@ -71,11 +79,11 @@
   :root[data-theme="buia"] .brand img { width: 28px; height: 28px; }
   :root[data-theme="buia"] .brand b { display: none; font-size: 17px; letter-spacing: .1em; }
   :root[data-theme="buia"] #status { flex: none; height: 28px; line-height: 27px; padding: 0 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #020a06aa; border-bottom: 1px solid #1e5a3a44; }
-  :root[data-theme="buia"] #panel, :root[data-theme="buia"] #mpanel { top: 84px; background: #020b07f2; backdrop-filter: blur(14px); }
+  :root[data-theme="buia"] #panel, :root[data-theme="buia"] #mpanel, :root[data-theme="buia"] #vpanel { top: 84px; background: #020b07f2; backdrop-filter: blur(14px); }
   :root[data-theme="buia"] #status::before { content: ""; display: inline-block; width: 16px; height: 16px; margin-right: 8px; vertical-align: -3px; background: url(/buia-icon-64.png) center / contain no-repeat; }
   :root[data-theme="buia"] #thinkl { font-size: 13px; }
-  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box) { background: #0c1f19; border: 1px solid #1d4633; border-radius: 12px; color: var(--fg); }
-  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box):focus { outline: none; border-color: #3df97a99; box-shadow: 0 0 0 3px #3df97a22; }
+  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin) { background: #0c1f19; border: 1px solid #1d4633; border-radius: 12px; color: var(--fg); }
+  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin):focus { outline: none; border-color: #3df97a99; box-shadow: 0 0 0 3px #3df97a22; }
   :root[data-theme="buia"] #msel { padding: 6px 8px; }
   :root[data-theme="buia"] #box { border-radius: 18px; padding: 12px 14px; }
   :root[data-theme="buia"] button { background: var(--btn); color: #fff; border: 1px solid #3df97a55; border-radius: 999px; font-weight: 600; cursor: pointer; }
@@ -141,8 +149,23 @@
   <div id="mres"></div>
   <h3>Image and video models</h3>
   <div id="sdinfo" class="muted"></div>
+  <div class="row"><button id="vopen">Video dashboard</button></div>
   <div id="sdmsg" class="bad"></div>
   <div id="sdlist"></div>
+</div>
+<div id="vpanel" hidden>
+  <div class="row"><h3 style="flex: 1; margin: 0">Video</h3><button id="vclose" class="plain">Close</button></div>
+  <select id="vmodel" class="vin" title="Video model"></select>
+  <div id="vinfo" class="muted"></div>
+  <textarea id="vprompt" class="vin" rows="3" placeholder="Describe the video"></textarea>
+  <div id="vform" class="vf"></div>
+  <div class="row"><button id="vgo">Generate</button><button id="vreset" class="plain" title="Put this model's parameters back to their defaults">Reset parameters</button></div>
+  <div id="vrun" hidden>
+    <progress id="vbar" max="100" title="One bar for all phases: the step counter beside it is exact, the bar's sections are only a layout."></progress>
+    <div id="vtxt" class="muted"></div>
+  </div>
+  <div id="vmsg" class="bad"></div>
+  <div id="vout"></div>
 </div>
 <div id="log"></div>
 <div id="welcome"><img src="/buia-logo.png" alt="" width="124" height="124" loading="lazy"><h1>Hello! 👋</h1><p>How can I help you today?</p></div>
@@ -153,7 +176,7 @@
 </form>
 <script>
 const $ = id => document.getElementById(id);
-const log = $('log'), box = $('box'), panel = $('panel');
+const log = $('log'), box = $('box'), panel = $('panel'), vpanel = $('vpanel');
 let chatId = null, ctl = null;
 
 // Any 401 from the server means there is no valid session (never logged in, or the cookie expired): show the login form.
@@ -406,7 +429,7 @@ for (const ex of EXAMPLES) $('chips').append(el('span', { class: 'chip', textCon
 $('check').onclick = () => runCheck($('repo').value);
 $('repo').onkeydown = e => { if (e.key === 'Enter') runCheck(e.target.value); };
 $('models').onclick = () => {
-  panel.hidden = true; mpanel.hidden = !mpanel.hidden;
+  panel.hidden = true; vpanel.hidden = true; mpanel.hidden = !mpanel.hidden;
   if (!mpanel.hidden) { refreshHw(); refreshModels(); renderInstalled(); refreshSd(); } else { clearTimeout(pollTimer); clearTimeout(sdTimer); }
 };
 
@@ -468,7 +491,7 @@ async function watchPending(id) {
   }
 }
 
-function newChat() { chatId = null; history.replaceState(null, '', location.pathname); log.innerHTML = ''; panel.hidden = true; mpanel.hidden = true; }
+function newChat() { chatId = null; history.replaceState(null, '', location.pathname); log.innerHTML = ''; panel.hidden = true; mpanel.hidden = true; vpanel.hidden = true; }
 
 async function openChat(id) {
   const r = await fetch('/api/chats/' + id);
@@ -487,7 +510,7 @@ async function openChat(id) {
 }
 
 async function showChats() {
-  mpanel.hidden = true;
+  mpanel.hidden = true; vpanel.hidden = true;
   if (!panel.hidden) { panel.hidden = true; return; }
   panel.textContent = '';
   const list = await (await fetch('/api/chats')).json();
@@ -504,6 +527,102 @@ async function showChats() {
   panel.append(el('button', { class: 'plain', textContent: 'Log out', onclick: async () => { await fetch('/api/logout', { method: 'POST' }); newChat(); showLogin(); } }));
   panel.hidden = false;
 }
+
+// ---------- video: one form per model (its own parameters, agent/videogen.py) and a progress bar while a video is made ----------
+const PHASE = { queued: 'Waiting in the queue', starting: 'Starting', text: 'Encoding the prompt (CPU)', loading: 'Loading the model', sampling: 'Sampling',
+                decoding: 'Decoding the video', saving: 'Saving the video', running: 'Working' };
+let vsd = null, vform = [], vwatch = null, vsw = null;  // models list, fields of the shown model, job timer, restart timer
+const vkey = () => 'buia.video.' + ($('vmodel').value || 'server');
+const vactive = () => { const m = (vsd?.models || []).find(m => m.id === $('vmodel').value); return $('vmodel').value ? !!m?.active : true; };
+const vsave = () => { try { localStorage.setItem(vkey(), JSON.stringify(vread())); } catch (e) {} };
+function vread() {  // what the form holds, as strings: the server checks and converts
+  const v = { prompt: $('vprompt').value };
+  for (const f of vform) { const x = document.getElementById('vf-' + f.key); if (x) v[f.key] = x.value; }
+  return v;
+}
+function vbusy(b) { $('vgo').disabled = b || !vactive() || !vsd?.servers.video.up; $('vmodel').disabled = b; $('vreset').disabled = b; }
+async function vparams(fresh) {  // the form of the chosen model, filled with what was saved for it
+  $('vmsg').textContent = '';
+  let saved = {};
+  try { if (!fresh) saved = JSON.parse(localStorage.getItem(vkey())) || {}; } catch (e) {}
+  const p = await api('GET', '/api/video/params?model=' + encodeURIComponent($('vmodel').value));
+  vform = p.fields; if (fresh === false) $('vprompt').value = saved.prompt || '';
+  const box = $('vform'); box.textContent = '';
+  box.append(el('div', { class: 'muted wide', textContent: p.note }));
+  for (const f of vform) {
+    const val = saved[f.key] ?? (f.default ?? '');
+    let x;
+    if (f.type === 'text') x = el('textarea', { rows: 2, value: val, placeholder: f.placeholder });
+    else if (f.type === 'select') { x = el('select', {}, ...['', ...f.options].map(o => el('option', { value: o, textContent: o || f.placeholder }))); x.value = val; }
+    else x = el('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: val, placeholder: f.placeholder });
+    x.id = 'vf-' + f.key; x.className = 'vin'; x.onchange = vsave;
+    box.append(el('label', { class: f.type === 'text' ? 'wide' : '' }, f.label + (f.default === null ? ' (optional)' : ''), x, el('small', { textContent: f.help })));
+  }
+  vbusy(false);
+}
+async function vload(rebuild = true) {  // models and servers, then the form (rebuild = false keeps what is typed in it)
+  clearTimeout(vsw);
+  vsd = await api('GET', '/api/sd/models');
+  const sel = $('vmodel'), keep = sel.value, ready = vsd.models.filter(m => m.kind === 'video' && m.ready);
+  sel.textContent = '';
+  for (const m of ready) sel.append(el('option', { value: m.id, textContent: m.name.split(' [')[0] + (m.active ? '  ✓ in use' : '') }));
+  if (!ready.some(m => m.active) && vsd.servers.video.up) sel.append(el('option', { value: '', textContent: 'The video server as started (flags from .env)' }));
+  sel.value = ready.some(m => m.id === keep) || keep === '' && sel.querySelector('option[value=""]') ? keep : (ready.find(m => m.active) || ready[0] || { id: '' }).id;
+  const up = vsd.servers.video;
+  $('vinfo').textContent = !sel.options.length ? 'No video model is downloaded yet: download one in the Models panel first.'
+    : !vactive() ? 'This model is not in use. Use restarts the video server with it (a few seconds, then it loads).'
+    : up.up ? 'Video server running ' + (up.model || '') : 'The video server is not running (or still loading the model).';
+  if (sel.options.length) { if (!vactive()) $('vinfo').append(' ', el('button', { class: 'plain', textContent: 'Use', onclick: vuse })); if (rebuild) await vparams(false); else vbusy(false); }
+  else { vform = []; $('vform').textContent = ''; vbusy(true); }
+  if (sel.options.length && !(vactive() && up.up) && !vwatch) vsw = setTimeout(() => !vpanel.hidden && vload(false).catch(() => {}), 3000);  // wait for the restart
+}
+async function vuse() {
+  try { await api('POST', '/api/sd/use', { id: $('vmodel').value }); } catch (e) { $('vmsg').textContent = e.message; return; }
+  vload();
+}
+function vshow(j) {  // one answer of the job API on screen
+  $('vrun').hidden = j.state !== 'running';
+  const bar = $('vbar');
+  if (j.percent == null) bar.removeAttribute('value'); else bar.value = j.percent;
+  const q = j.phase === 'queued' && j.queue ? ' (position ' + j.queue + ')' : '';
+  $('vtxt').textContent = (PHASE[j.phase] || j.phase) + q + (j.steps ? ' ' + j.step + '/' + j.steps : '') + ' · ' + j.elapsed + ' s' + (j.percent != null ? ' · ' + j.percent + '%' : '');
+  if (j.state === 'error') $('vmsg').textContent = j.error;
+  if (j.state === 'done') {
+    $('vout').textContent = '';
+    $('vout').append(el('video', { src: j.result.url, controls: true, loop: true, playsInline: true, className: 'media' }),
+                     el('div', { class: 'muted', textContent: j.saved + ' · seed ' + j.seed }));
+  }
+}
+function vtrack(id) {
+  clearInterval(vwatch); vbusy(true);
+  const tick = async () => {
+    try {
+      const j = await api('GET', '/api/video/jobs/' + id);
+      vshow(j);
+      if (j.state === 'running') return;
+    } catch (e) { $('vmsg').textContent = e.message; }
+    clearInterval(vwatch); vwatch = null; vbusy(false);
+  };
+  vwatch = setInterval(tick, 1000); tick();
+}
+$('vgo').onclick = async () => {
+  $('vmsg').textContent = ''; $('vout').textContent = ''; vsave();
+  try { const j = await api('POST', '/api/video/jobs', { model: $('vmodel').value, values: vread() }); vshow(j); vtrack(j.id); $('vrun').scrollIntoView({ block: 'nearest' }); }  // the form is long: show the bar
+  catch (e) { $('vmsg').textContent = e.message; }
+};
+$('vprompt').onchange = vsave;
+$('vreset').onclick = () => { try { localStorage.removeItem(vkey()); } catch (e) {} vparams(true).catch(e => { $('vmsg').textContent = e.message; }); };
+$('vmodel').onchange = () => { if (!vwatch) vload().catch(e => { $('vmsg').textContent = e.message; }); };
+$('vclose').onclick = () => { vpanel.hidden = true; clearTimeout(vsw); };
+$('vopen').onclick = async () => {  // from the Models panel: the header has no room for one more button on a phone
+  panel.hidden = true; mpanel.hidden = true; vpanel.hidden = false;
+  clearTimeout(vsw);
+  try {
+    await vload();
+    const [last] = await api('GET', '/api/video/jobs');  // a job that is still running (or the last one) shows again after a reload
+    if (last && !vwatch && last.state !== 'error' && (last.state === 'running' || !$('vout').hasChildNodes())) { vshow(last); if (last.state === 'running') vtrack(last.id); }
+  } catch (e) { $('vmsg').textContent = e.message; }
+};
 
 $('f').onsubmit = e => { e.preventDefault(); const t = box.value.trim(); if (!t || ctl) return; box.value = ''; ask(t); };
 box.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('f').requestSubmit(); };

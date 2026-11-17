@@ -50,6 +50,7 @@ Then open http://127.0.0.1:8000 and log in with the password the installer print
 ## Web UI
 
 - **Models** downloads and selects chat models (Hugging Face repo, quant marked `fits` or not) and, below that, the image and video presets.
+- **Video dashboard** (button in Models, under the image and video presets) makes videos from a form with a progress bar, see [Video dashboard](#video-dashboard).
 - **Think** lets the model reason before it answers (slower, uses more context). Off by default; the choice is kept per browser.
 - **Theme** (the selector in the header): Plain, Light, Dark, Sepia, BUIA. Plain is the default and follows your operating system's light or dark setting; the choice is kept per browser.
 - **Chats** lists the chats saved as JSON files in `chats\` inside your buia folder. Generated images and videos stay in their chat.
@@ -128,6 +129,23 @@ and builds the `sd` service from `docker-compose.yml`. The first build compiles 
 A generation keeps running if you close the page, the phone sleeps or you press Stop; the result is added to the chat when it is done
 (reopen the chat to see it). The chat accepts the next message after that. Stop does not cancel the job itself.
 Every service keeps only its newest 60 MB of Docker logs (3 files of 20 MB). `docker compose logs sd | findstr /c:"compute buffer"` shows the buffer sizes of the last job.
+
+### Video dashboard
+
+**Models > Video dashboard** makes a video without going through the chat. Pick a downloaded video model (one that is not in use shows a **Use**
+button; the video server restarts and the form waits for it), write the prompt and press **Generate**.
+
+- The form is made from the parameters of the model you picked. **Wan 2.1 / 2.2** (and any model `sd-video` runs): negative prompt, width, height, frames, frames per
+  second, steps, cfg scale, sampler, flow shift, seed. Three of them are optional (cfg scale, sampler, flow shift): left empty they keep the flags the model was
+  started with, which show as the grey hint. **CogVideoX**: negative prompt, steps (10-50), guidance scale (1-20, default 6) and seed; its 720x480x49 format is fixed.
+  Size, frames and steps stop at the limits `generate_video` uses (`VIDEO_MAX_*` in `agent/agent.py`). Seed -1 picks a random one; the one used is shown next to the video.
+  The values are remembered per model in your browser; **Reset parameters** puts the defaults back.
+- The progress bar goes through the phases (waiting, loading, sampling, decoding) and the text beside it gives the exact step: `Sampling 7/10 · 41 s`. The bar is one scale for
+  all phases, so its sections are a layout, not shares of the time. CogVideoX reports its steps in the job; stable-diffusion.cpp's job answer has no progress, only its
+  output has, so `sd-run.sh` also copies that to the `sdlogs` volume (`active-video.log`, emptied at every server start and when it passes 10 MB) and the agent reads it from there
+  (read-only). After an update, `.\update.cmd` recreates the services with it. Without the volume the bar is not filled and shows what is happening and the elapsed time.
+- One video at a time: the chat refuses new messages while it runs, because its model would load next to the video model, and the chat model is unloaded before the job like it is for
+  `generate_video`. Reloading the page shows the running job again. The video is saved in `generated\` inside your workspace folder (it is not added to a chat).
 
 ### CogVideoX 2B (optional second video engine)
 
