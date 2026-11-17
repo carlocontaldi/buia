@@ -77,6 +77,10 @@ services:
         target: /data/sdmodels          # outside the workspace and the vault, so the model's file tools cannot reach it
         bind:
           create_host_path: true
+      - type: volume
+        source: sdlogs                  # sd-server's output (sd-run.sh copies it): the Video panel reads the sampling steps of a job from it
+        target: /sdlogs
+        read_only: true
 
   # Web search for the agent's web_search tool: a SearXNG metasearch engine, no account or API key. It starts with everything else; the agent
   # does not wait for it, so a failed start only makes web_search report an error. WEB_ACCESS=off in .env removes the tools but not this container.
@@ -123,6 +127,9 @@ services:
         source: ./sdmodels   # relative to the folder holding this compose file (buia-stack), next to ./sdcpp
         target: /models
         read_only: true
+      - type: volume
+        source: sdlogs   # sd-run.sh copies sd-server's output to /logs/active-<kind>.log; the agent mounts the volume read-only (progress bar)
+        target: /logs
     # no "ports:" on purpose: only the agent container should reach sd-server
     logging: *logging                # -v is chatty, so this one matters most
     deploy:
@@ -167,3 +174,4 @@ services:
 
 volumes:
   models:
+  sdlogs:

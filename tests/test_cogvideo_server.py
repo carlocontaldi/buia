@@ -18,16 +18,22 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location("cogvideo_server", Path(__file__).resolve().parents[1] / "cogvideo" / "server.py")
 server = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(server)
+GSPEC = importlib.util.spec_from_file_location("cogvideo_generate", Path(__file__).resolve().parents[1] / "cogvideo" / "generate.py")
+generate = importlib.util.module_from_spec(GSPEC)
+GSPEC.loader.exec_module(generate)  # imports only the standard library at the top: torch and diffusers load inside the job
 
 
 class FakeGenerate:
     """Stands in for `python generate.py <job.json>`: writes the video the job asks for, or an error."""
 
-    def __init__(self, size=None, rc=0, error=None, gate=None):
-        self.size, self.rc, self.error, self.gate = size, rc, error, gate
+    def __init__(self, size=None, rc=0, error=None, gate=None, progress=None):
+        self.size, self.rc, self.error, self.gate, self.progress = size, rc, error, gate, progress
+        self.job = None  # the job file as generate.py would have read it
 
     def __call__(self, cmd, *args, **kwargs):
-        job = json.loads(Path(cmd[-1]).read_text(encoding="utf-8"))
+        job = self.job = json.loads(Path(cmd[-1]).read_text(encoding="utf-8"))
+        if self.progress:  # what generate.py's report() would have written by now
+            Path(job["out"] + ".progress").write_text(json.dumps(self.progress), encoding="utf-8")
         if self.gate:
             self.gate.wait(10)
         out = Path(job["out"])
@@ -55,6 +61,40 @@ class CheckTests(unittest.TestCase):
                 job, why = server.check(req)
                 self.assertIsNone(job)
                 self.assertIn(word, why)
+
+
+class ParameterTests(unittest.TestCase):
+    def test_negative_prompt_and_guidance_reach_the_job(self):
+        job, why = server.check({"prompt": "x", "negative_prompt": "  blurry ", "sample_params": {"sample_steps": 20, "guidance": {"txt_cfg": 4}}})
+        self.assertEqual(why, "")
+        self.assertEqual((job["negative"], job["guidance"], job["steps"]), ("blurry", 4.0, 20))
+
+    def test_defaults_are_the_model_cards(self):
+        job, _ = server.check({"prompt": "x"})
+        self.assertEqual((job["negative"], job["guidance"]), ("", 6.0))
+
+    def test_refuses_bad_negative_prompt_and_guidance(self):
+        for req, word in (({"negative_prompt": 5}, "negative_prompt"), ({"negative_prompt": "x" * 2001}, "negative_prompt"),
+                          ({"sample_params": {"guidance": 6}}, "object"), ({"sample_params": {"guidance": {"txt_cfg": "6"}}}, "txt_cfg"),
+                          ({"sample_params": {"guidance": {"txt_cfg": True}}}, "txt_cfg"), ({"sample_params": {"guidance": {"txt_cfg": 0.5}}}, "txt_cfg"),
+                          ({"sample_params": {"guidance": {"txt_cfg": 21}}}, "txt_cfg")):
+            with self.subTest(req=req):
+                job, why = server.check({"prompt": "x"} | req)
+                self.assertIsNone(job)
+                self.assertIn(word, why)
+
+
+class ReportTests(unittest.TestCase):
+    def test_report_replaces_the_progress_file_whole(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = str(Path(d) / "job.webm")
+            generate.report(out, "sampling", 3, 50)
+            generate.report(out, "decoding")
+            self.assertEqual(json.loads(Path(out + ".progress").read_text(encoding="utf-8")), {"phase": "decoding", "step": 0, "steps": 0})
+            self.assertEqual([f.name for f in Path(d).iterdir()], ["job.webm.progress"])  # no temp file left behind
+
+    def test_report_never_fails_the_job(self):
+        generate.report("/nonexistent-folder/job.webm", "text")
 
 
 class ApiTests(unittest.TestCase):
@@ -96,6 +136,51 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("b64_json", job["result"])
         status, ctype, data = self.request("GET", job["result"]["result_url"])
         self.assertEqual((status, ctype, data), (200, "video/webm", b"webm:hello"))
+
+    def test_a_running_job_shows_its_progress_and_leaves_no_file_after(self):
+        gate = threading.Event()
+        fake = FakeGenerate(gate=gate, progress={"phase": "sampling", "step": 7, "steps": 50})
+        with patch.object(server.subprocess, "run", fake):
+            status, _, data = self.request("POST", "/sdcpp/v1/vid_gen", {"prompt": "x"})
+            jid = json.loads(data)["id"]
+            for _ in range(100):  # the fake writes the file as soon as its thread runs
+                job = json.loads(self.request("GET", f"/sdcpp/v1/jobs/{jid}")[2])
+                if "progress" in job:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(job, {"status": "running", "progress": {"phase": "sampling", "step": 7, "steps": 50}})
+            gate.set()
+            for _ in range(100):
+                job = json.loads(self.request("GET", f"/sdcpp/v1/jobs/{jid}")[2])
+                if job["status"] != "running":
+                    break
+                time.sleep(0.05)
+        self.assertEqual(job["status"], "completed")
+        self.assertNotIn("progress", job)
+        self.assertEqual(sorted(f.name for f in self.tmp.iterdir()), [f"{jid}.webm"])  # the video only: progress files are cleaned up
+
+    def test_garbled_progress_file_is_ignored(self):
+        gate = threading.Event()
+        with patch.object(server.subprocess, "run", FakeGenerate(gate=gate)):
+            _, _, data = self.request("POST", "/sdcpp/v1/vid_gen", {"prompt": "x"})
+            jid = json.loads(data)["id"]
+            for text in ("{not json", "[1, 2]"):
+                (self.tmp / f"{jid}.webm.progress").write_text(text, encoding="utf-8")
+                self.assertEqual(json.loads(self.request("GET", f"/sdcpp/v1/jobs/{jid}")[2]), {"status": "running"})
+            gate.set()
+
+    def test_the_job_gets_the_negative_prompt_and_guidance(self):
+        fake = FakeGenerate()
+        with patch.object(server.subprocess, "run", fake):
+            status, _, data = self.request("POST", "/sdcpp/v1/vid_gen", {"prompt": "x", "negative_prompt": "blurry", "seed": 5,
+                                                                        "sample_params": {"sample_steps": 12, "guidance": {"txt_cfg": 3.5}}})
+            self.assertEqual(status, 202, data)
+            for _ in range(100):
+                if fake.job:
+                    break
+                time.sleep(0.05)
+        self.assertEqual({k: fake.job[k] for k in ("prompt", "negative", "guidance", "steps", "seed")},
+                         {"prompt": "x", "negative": "blurry", "guidance": 3.5, "steps": 12, "seed": 5})
 
     def test_no_result_for_unknown_or_running_jobs(self):
         gate = threading.Event()
