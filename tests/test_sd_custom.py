@@ -4,6 +4,8 @@ import asyncio
 import importlib.util
 import json
 import os
+import re
+import struct
 import sys
 import tempfile
 import types
@@ -32,6 +34,35 @@ def load_sdmodels():
     with mock.patch.dict(sys.modules, {"models": stub}):
         spec.loader.exec_module(mod)
     return mod
+
+
+def fake_header(kind, in_channels=4, middle=True):
+    """A safetensors header (names, shapes, sizes only) shaped like a real checkpoint of that kind."""
+    MB = 1024 * 1024
+    h, off = {"__metadata__": {"format": "pt"}}, [0]
+    def add(name, shape, mb, dtype="F16"):
+        h[name] = {"dtype": dtype, "shape": shape, "data_offsets": [off[0], off[0] + mb * MB]}
+        off[0] += mb * MB
+    if kind == "flux":
+        add("model.diffusion_model.double_blocks.0.img_attn.qkv.weight", [9216, 3072], 100)
+        return h
+    if kind == "diffusers":
+        add("conv_in.weight", [320, 4, 3, 3], 1)
+        add("down_blocks.0.attentions.0.proj_in.weight", [320, 320], 1)
+        return h
+    add("model.diffusion_model.input_blocks.0.0.weight", [320, in_channels, 3, 3], 1)
+    add("model.diffusion_model.input_blocks.1.0.weight", [320, 320, 3, 3], 3000 if kind == "sdxl" else 1500)
+    if middle:
+        add("model.diffusion_model.middle_block.1.proj_in.weight", [1280, 1280], 500)
+    add("first_stage_model.decoder.conv_in.weight", [512, 4, 3, 3], 160 if kind == "sdxl" else 80)
+    if kind == "sdxl":
+        add("conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight", [49408, 768], 235)
+        add("conditioner.embedders.1.model.token_embedding.weight", [49408, 1280], 1500)
+    elif kind == "sd15":
+        add("cond_stage_model.transformer.text_model.embeddings.token_embedding.weight", [49408, 768], 235)
+    elif kind == "sd2":
+        add("cond_stage_model.model.token_embedding.weight", [49408, 1024], 300)
+    return h
 
 
 @unittest.skipUnless(HAVE, "needs fastapi and httpx")
@@ -64,10 +95,131 @@ class CustomModels(unittest.TestCase):
         self.assertIn("umt5-xxl-encoder-Q4_K_S.gguf", p["args"])
         self.assertEqual(p["family"], "wan21-t2v-1.3b")
 
-    def test_make_custom_cogvideo_keeps_layout(self):
-        p = self.sd.make_custom("mirror/CogVideoX-2b", "model_index.json", "cogvideox-2b")
-        self.assertEqual(p["engine"], "cogvideo")
-        self.assertTrue(all(f[0] == "mirror/CogVideoX-2b" and len(f) == 3 for f in p["files"]))
+    def test_cogvideo_has_no_customs(self):
+        # the cogvideo service reads one fixed folder (sdmodels/CogVideoX-2b): a second repo would share files with the preset
+        base_files = self.sd.preset("cogvideox-2b")["files"]
+        tree = [{"type": "file", "path": f[1], "size": 10} for f in base_files]
+        async def fake_tree(repo): return tree
+        with mock.patch.object(self.sd, "repo_tree", fake_tree):
+            with self.assertRaises(self.sd.HTTPException) as e:
+                asyncio.run(self.sd.api_check(self.sd.RepoBody(repo="mirror/CogVideoX-2b")))
+            self.assertEqual(e.exception.status_code, 400)
+            self.assertNotIn("CogVideoX", e.exception.detail)
+            with self.assertRaises(self.sd.HTTPException):
+                asyncio.run(self.sd.api_add(self.sd.AddBody(repo="mirror/CogVideoX-2b", path="model_index.json")))
+        entry = {"id": "cog-x", "custom": True, "family": "cogvideox-2b", "kind": "video", "args": "", "engine": "cogvideo",
+                 "files": [["mirror/CogVideoX-2b", "model_index.json", "CogVideoX-2b/model_index.json"]]}
+        self.assertFalse(self.sd.custom_ok(entry))
+
+    def test_verdicts(self):
+        r = lambda need, ram=None: self.sd.fit_result(need, 8192, "estimate", "ref", ram)  # usable VRAM 7680 MB
+        self.assertEqual(r(5000)["verdict"], "fits")
+        self.assertEqual(r(7500)["verdict"], "tight")
+        self.assertTrue(r(7500)["fits"])
+        self.assertEqual(r(9000, ram=20000)["verdict"], "offload")
+        self.assertFalse(r(9000, ram=20000)["fits"])
+        self.assertEqual(r(9000)["verdict"], "offload")            # free RAM unknown: no claim that it cannot run
+        self.assertEqual(r(30000, ram=8000)["verdict"], "no")
+        self.assertIn("short by", r(30000, ram=8000)["reason"])
+
+    def test_flux_schnell_template(self):
+        for name in ("flux1-schnell-q4_0.gguf", "FLUX.1-schnell-Q4_K_S.gguf", "flux_1_schnell-Q8_0.gguf"):
+            self.assertTrue(re.search(self.sd.TEMPLATES["flux1-schnell"]["pattern"], name, re.I), name)
+        self.assertFalse(re.search(self.sd.TEMPLATES["flux1-schnell"]["pattern"], "flux1-dev-q4_0.gguf", re.I))
+        p = self.sd.make_custom("city96/FLUX.1-schnell-gguf", "flux1-schnell-Q4_K_S.gguf", "flux1-schnell")
+        self.assertIn("/models/custom/", p["args"])
+        self.assertNotIn("flux1-schnell-q4_0.gguf", p["args"])
+        self.assertEqual([f[1] for f in p["files"][1:]], ["clip_l.safetensors", "t5xxl_fp16.safetensors", "split_files/vae/ae.safetensors"])
+        self.assertTrue(self.sd.custom_ok(p))
+
+    def test_checkpoint_info_families(self):
+        sdxl = fake_header("sdxl")
+        info = self.sd.checkpoint_info(sdxl)
+        self.assertEqual(info["family"], "sdxl")
+        self.assertEqual(info["dtype"], "F16")
+        self.assertEqual(info["mb"], round(sum(v["data_offsets"][1] - v["data_offsets"][0] for k, v in sdxl.items() if k != "__metadata__") / (1024 * 1024)))
+        self.assertEqual(info["parts_mb"], {"diffusion": 3501, "te": 1735, "vae": 160, "other": 0})
+        self.assertEqual(self.sd.checkpoint_info(fake_header("sd15"))["family"], "sd15")
+
+    def test_checkpoint_info_rejects_other_files(self):
+        self.assertIsNone(self.sd.checkpoint_info(fake_header("sdxl", in_channels=9)))     # inpaint
+        self.assertIsNone(self.sd.checkpoint_info(fake_header("sdxl", middle=False)))      # tiny / distilled UNet
+        self.assertIsNone(self.sd.checkpoint_info(fake_header("sd2")))                     # SD 2.x: not in these templates
+        self.assertIsNone(self.sd.checkpoint_info(fake_header("diffusers")))               # Diffusers layout
+        self.assertIsNone(self.sd.checkpoint_info(fake_header("flux")))                    # diffusion-only file
+        self.assertIsNone(self.sd.checkpoint_info({"__metadata__": {}}))
+        bad = fake_header("sdxl")
+        bad["model.diffusion_model.input_blocks.1.0.weight"]["data_offsets"] = "oops"
+        self.assertIsNone(self.sd.checkpoint_info(bad))
+
+    def test_check_finds_checkpoints_by_tensor_names(self):
+        MB = 1024 * 1024
+        tree = [{"type": "file", "path": "juggernaut_final.safetensors", "lfs": {"size": 6600 * MB}},      # a name that says nothing
+                {"type": "file", "path": "vae/diffusion_pytorch_model.safetensors", "lfs": {"size": 3000 * MB}},
+                {"type": "file", "path": "small_lora.safetensors", "size": 100 * MB},
+                {"type": "file", "path": "other_unknown.safetensors", "lfs": {"size": 7000 * MB}}]
+        async def fake_tree(repo): return tree
+        async def fake_ckpt(repo, path): return self.sd.checkpoint_info(fake_header("sdxl")) if path == "juggernaut_final.safetensors" else None
+        with mock.patch.object(self.sd, "repo_tree", fake_tree), mock.patch.object(self.sd, "checkpoint_of", fake_ckpt):
+            chk = asyncio.run(self.sd.api_check(self.sd.RepoBody(repo="someone/jugg")))
+            self.assertEqual([f["family"] for f in chk["families"]], ["sdxl"])
+            v = chk["families"][0]["variants"][0]
+            self.assertEqual(v["path"], "juggernaut_final.safetensors")
+            self.assertEqual(v["fit"]["source"], "header")
+            self.assertIn(v["fit"]["verdict"], ("tight", "offload", "no"))   # 6.6 GB of weights + 2 GB on an 8 GB card
+            self.assertNotIn("warning", v)
+            added = asyncio.run(self.sd.api_add(self.sd.AddBody(repo="someone/jugg", path="juggernaut_final.safetensors")))
+            p = self.sd.preset(added["id"])
+            self.assertEqual(p["family"], "sdxl")
+            self.assertTrue(p["args"].startswith("-m /models/custom/"))
+            self.assertEqual(p["info"]["family"], "sdxl")
+            self.assertEqual(added["fit"]["source"], "header")
+            with self.assertRaises(self.sd.HTTPException) as e:   # a file the header check does not accept
+                asyncio.run(self.sd.api_add(self.sd.AddBody(repo="someone/jugg", path="other_unknown.safetensors")))
+            self.assertEqual(e.exception.status_code, 400)
+            asyncio.run(self.sd.api_delete(added["id"]))
+
+    def test_distilled_name_gets_a_warning(self):
+        tree = [{"type": "file", "path": "sd_xl_turbo_1.0_fp16.safetensors", "lfs": {"size": 6600 * 1024 * 1024}}]
+        async def fake_tree(repo): return tree
+        async def fake_ckpt(repo, path): return self.sd.checkpoint_info(fake_header("sdxl"))
+        with mock.patch.object(self.sd, "repo_tree", fake_tree), mock.patch.object(self.sd, "checkpoint_of", fake_ckpt):
+            v = asyncio.run(self.sd.api_check(self.sd.RepoBody(repo="stabilityai/sdxl-turbo")))["families"][0]["variants"][0]
+            self.assertIn("distilled", v["warning"])
+
+    def test_header_read_over_http_with_range(self):
+        header = fake_header("sd15")
+        raw = json.dumps(header).encode()
+        blob = struct.pack("<Q", len(raw)) + raw + b"\0" * 64
+        seen = []
+        def handler(request):
+            seen.append(request.headers.get("range"))
+            rng = request.headers["range"].split("=")[1].split("-")
+            return httpx.Response(206, content=blob[int(rng[0]):int(rng[1]) + 1])
+        real = httpx.AsyncClient
+        factory = lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+        with mock.patch.object(self.sd.httpx, "AsyncClient", factory):
+            info = asyncio.run(self.sd.read_checkpoint("someone/sd15", "v1-5-pruned-emaonly.safetensors"))
+            self.assertEqual(info["family"], "sd15")
+            self.assertEqual(seen, ["bytes=0-1048575"])       # one request: the header fits in the first MB
+            big = {**header, "pad": {"dtype": "F16", "shape": [1], "data_offsets": [0, 2], "x": "y" * (2 << 20)}}
+            raw = json.dumps(big).encode()
+            blob = struct.pack("<Q", len(raw)) + raw
+            seen.clear()
+            self.assertEqual(asyncio.run(self.sd.read_checkpoint("someone/sd15", "x.safetensors"))["family"], "sd15")
+            self.assertEqual(len(seen), 2)                   # a header over 1 MB is fetched whole with a second request
+            blob = struct.pack("<Q", 1 << 40) + b"x" * 100
+            with self.assertRaises(ValueError):
+                asyncio.run(self.sd.read_checkpoint("someone/bad", "x.safetensors"))
+        async def boom(repo, path): raise httpx.ConnectError("offline")
+        with mock.patch.object(self.sd, "read_checkpoint", boom):
+            self.assertIsNone(asyncio.run(self.sd.checkpoint_of("someone/sd15", "x.safetensors")))
+
+    def test_load_custom_validates_info(self):
+        p = self.sd.make_custom("someone/jugg", "j.safetensors", "sdxl", {"family": "sdxl", "mb": 6600})
+        self.assertTrue(self.sd.custom_ok(p))
+        self.assertFalse(self.sd.custom_ok({**p, "info": "6600"}))
+        self.assertFalse(self.sd.custom_ok({**p, "info": {"mb": True}}))
 
     def test_check_add_delete(self):
         tree = [{"type": "file", "path": "wan2.1_t2v_1.3B_Q4_K_M.gguf", "lfs": {"size": 900 * 1024 * 1024}},
