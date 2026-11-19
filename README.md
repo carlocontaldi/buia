@@ -16,8 +16,12 @@ It generates text, images and videos, reads and writes your notes through file t
 </h1>
 
 <h1 align="center">
+<p1 align="center">
   <img src="assets/buia-banner.png" alt="" width="1280"><br>
 </h1>
+</p1>
+
+---
 
 | Service | Started | What it does |
 |---|---|---|
@@ -124,6 +128,8 @@ and builds the `sd` service from `docker-compose.yml`. The first build compiles 
    file name; they reuse the preset's companion files and flags), and single-file SD 1.x or SDXL checkpoints (`.safetensors`, found by their
    tensor names, whatever the file is called; distilled ones such as Turbo or Lightning get a warning because the flags are for standard models).
    CogVideoX has no customs: its service reads one fixed folder. Customs are saved in `sdmodels\custom.json` and use the same Download / Use / Delete buttons.
+	   CogVideoX has no customs: its service reads one fixed folder. Custom model paths containing whitespace or shell wildcards (`*?[]`) are refused
+	because the sd runner passes model flags as shell words. Customs are saved in `sdmodels\custom.json` and use the same Download / Use / Delete buttons.
    (Doing it by hand still works: put the files into `sdmodels\`, set `SD_ARGS` / `SD_VIDEO_ARGS` in `.env` as in `.env.example`, then
    `docker compose --profile sd up -d`. They apply while no model has been chosen with Use.)
 2. The sd server runs one model at a time: an image model cannot make videos and the other way round, which is why there are two servers.
@@ -203,6 +209,20 @@ Not covered: the words of a search are chosen by the model, so a page that tells
 
 Not covered: if Obsidian has plugins that run code found in notes (Dataview JS, Templater), a note the agent wrote could run when you open it.
 Keep those off for the folders the agent writes to.
+
+## Running tests
+
+Use Python 3.12, install the same hash-pinned dependencies as the agent, and run the suite from the repository root:
+
+```powershell
+python -m pip install --require-hashes -r agent/requirements.txt
+python -m unittest discover -s tests -v
+```
+
+The API tests require FastAPI and HTTPX; install the locked agent requirements before running discovery so dependency-based skips do not hide
+missing coverage. GitHub Actions runs the suite on Linux and Windows; `test_sd_run.py` exercises the Linux container supervisor and is skipped
+on Windows. In the agent container, only `test_sd_job.py` can be run from a copied `tests` directory because other tests locate source files
+relative to the repository layout.
 
 ## Updating dependencies
 
