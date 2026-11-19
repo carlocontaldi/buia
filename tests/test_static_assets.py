@@ -72,5 +72,14 @@ class StaticAssets(unittest.TestCase):
         self.assertEqual(missing, {}, "index.html refers to files the app does not serve (static/ is mounted at /)")
 
 
+    def test_every_overlay_panel_is_positioned_by_the_base_rule(self):
+        html = (AGENT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        panels = re.findall(r'<div id="(\w*panel)" hidden', html)
+        self.assertTrue(panels, "found no panels in index.html, the test would pass for nothing")
+        rule = re.search(r"([^{}]+)\{[^}]*position: absolute; top: 66px", html)
+        self.assertIsNotNone(rule, "the rule that overlays the panels is gone")
+        unpositioned = [p for p in panels if "#" + p not in rule.group(1)]
+        self.assertEqual(unpositioned, [], "these panels would render in the page flow instead of over it")
+
 if __name__ == "__main__":
     unittest.main()
