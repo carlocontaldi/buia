@@ -69,7 +69,7 @@
   /* Logo pieces: hidden in every theme but BUIA (the login logo is shown in all). */
   .brand, #welcome { display: none; }
   #login img { width: 96px; height: 96px; }
-  /* BUIA theme, after the GitHub banner: near-black green, neon-green accents, pill buttons, round send button, "Hello!" start screen.
+  /* BUIA theme, after the GitHub banner: near-black green, neon-green accents, pill buttons, round send button, "Hey!" start screen.
      Header (56px) and status line (28px) get fixed heights so the Chats/Models panels can sit at top: 84px. */
   :root[data-theme="buia"] body { background:
     radial-gradient(ellipse 52rem 26rem at 108% -6%, #0b6b3099, transparent 68%),
@@ -122,7 +122,7 @@
 </head>
 <body>
 <form id="login" hidden>
-  <img src="/buia-logo.png" alt="" width="96" height="96" loading="lazy">
+  <img src="/buia-logo-256.png" alt="" width="96" height="96" loading="lazy">
   <b>BUIA</b>
   <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
   <button>Log in</button>
@@ -163,12 +163,13 @@
   <div id="vrun" hidden>
     <progress id="vbar" max="100" title="One bar for all phases: the step counter beside it is exact, the bar's sections are only a layout."></progress>
     <div id="vtxt" class="muted"></div>
+    <button id="vcancel" class="plain" title="Stop this video. A CogVideoX job is stopped at once; the sd video server cannot interrupt a job, so it is restarted (a few seconds, the model loads again).">Cancel</button>
   </div>
   <div id="vmsg" class="bad"></div>
   <div id="vout"></div>
 </div>
 <div id="log"></div>
-<div id="welcome"><img src="/buia-logo.png" alt="" width="124" height="124" loading="lazy"><h1>Hey! 👋</h1><p>How can I help you today?</p></div>
+<div id="welcome"><img src="/buia-logo-256.png" alt="" width="124" height="124" loading="lazy"><h1>Hey! 👋</h1><p>How can I help you today?</p></div>
 <form id="f">
   <textarea id="box" rows="2" placeholder="Message (Ctrl+Enter to send)"></textarea>
   <button id="send">Send</button>
@@ -348,6 +349,7 @@ async function sdAct(method, url, body) {
   try { await api(method, url, body); } catch (e) { $('sdmsg').textContent = e.message; }
   refreshSd();
 }
+window.addEventListener('buia:sd-changed', refreshSd);  // fired by sd-custom.js after it adds a model
 function renderSd() {
   const run = k => k + ' server: ' + (sd.servers[k].up ? 'running ' + (sd.servers[k].model || 'with no model') : 'not running');
   $('sdinfo').textContent = run('image') + ' · ' + run('video') + ' · ' + size(sd.disk_free_mb) + ' free. A server restarts a few seconds after you click Use.'
@@ -585,8 +587,10 @@ function vshow(j) {  // one answer of the job API on screen
   const bar = $('vbar');
   if (j.percent == null) bar.removeAttribute('value'); else bar.value = j.percent;
   const q = j.phase === 'queued' && j.queue ? ' (position ' + j.queue + ')' : '';
-  $('vtxt').textContent = (PHASE[j.phase] || j.phase) + q + (j.steps ? ' ' + j.step + '/' + j.steps : '') + ' · ' + j.elapsed + ' s' + (j.percent != null ? ' · ' + j.percent + '%' : '');
+  $('vtxt').textContent = (j.cancelling ? 'Cancelling… ' : '') + (PHASE[j.phase] || j.phase) + q + (j.steps ? ' ' + j.step + '/' + j.steps : '') + ' · ' + j.elapsed + ' s' + (j.percent != null ? ' · ' + j.percent + '%' : '');
+  $('vcancel').dataset.id = j.id; $('vcancel').disabled = j.cancelling;
   if (j.state === 'error') $('vmsg').textContent = j.error;
+  if (j.state === 'cancelled') $('vout').replaceChildren(el('div', { class: 'muted', textContent: 'Cancelled after ' + j.elapsed + ' s.' }));
   if (j.state === 'done') {
     $('vout').textContent = '';
     $('vout').append(el('video', { src: j.result.url, controls: true, loop: true, playsInline: true, className: 'media' }),
@@ -609,6 +613,11 @@ $('vgo').onclick = async () => {
   $('vmsg').textContent = ''; $('vout').textContent = ''; vsave();
   try { const j = await api('POST', '/api/video/jobs', { model: $('vmodel').value, values: vread() }); vshow(j); vtrack(j.id); $('vrun').scrollIntoView({ block: 'nearest' }); }  // the form is long: show the bar
   catch (e) { $('vmsg').textContent = e.message; }
+};
+$('vcancel').onclick = async () => {
+  $('vcancel').disabled = true;
+  try { vshow(await api('POST', '/api/video/jobs/' + $('vcancel').dataset.id + '/cancel')); }
+  catch (e) { $('vmsg').textContent = e.message; $('vcancel').disabled = false; }
 };
 $('vprompt').onchange = vsave;
 $('vreset').onclick = () => { try { localStorage.removeItem(vkey()); } catch (e) {} vparams(true).catch(e => { $('vmsg').textContent = e.message; }); };
@@ -638,6 +647,6 @@ async function boot() {  // runs on load and again after each login
 }
 boot();
 </script>
-  <script src="static/sd-custom.js" defer></script>
+  <script src="sd-custom.js" defer></script>
 </body>
 </html>

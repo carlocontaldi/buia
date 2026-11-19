@@ -62,7 +62,7 @@ def render(pos, neg, steps: int, seed: int, device: str = "cuda", guidance: floa
             report("decoding")  # the VAE decodes inside the pipe call, after the last step
         return kwargs
 
-    dev = torch.device("cuda")
+    dev = torch.device(device)  # the embeddings go where the generator is
     pos = pos.to(dev)
     neg = neg.to(dev)
 

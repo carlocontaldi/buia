@@ -4,6 +4,7 @@
   GET  /sdcpp/v1/jobs/<id>               -> {"status": "running" | "completed" | "failed", "result": {..., "result_url": ...} | "error": "..."}
                                             a running job also has "progress": {"phase": "text" | "loading" | "sampling" | "decoding" | "saving", "step": i, "steps": N}
   GET  /sdcpp/v1/jobs/<id>/result        -> the finished video (video/webm); the result_url of a completed job
+  POST /sdcpp/v1/jobs/<id>/cancel        -> 200; a running job's process is stopped and the job ends as "cancelled" (sd-server cannot do this)
 Each job runs generate.py in a fresh process, so this server itself never touches the GPU and idles at no VRAM. No imports beyond the
 standard library on purpose: torch and diffusers are only loaded by the job.
 """
@@ -26,6 +27,7 @@ MIN_GUIDANCE, MAX_GUIDANCE, DEFAULT_GUIDANCE = 1.0, 20.0, 6.0   # the default is
 MAX_NEGATIVE = 2000                            # characters
 JOBS: dict[str, dict] = {}                     # id -> {"status", "result" | "error"}; only the newest few are kept
 JOB_FILES: dict[str, Path] = {}                # id -> finished video file in the temp folder; kept exactly as long as the job is
+PROCS: dict[str, subprocess.Popen] = {}        # id -> the generate.py process of a running job
 LOCK = threading.Lock()
 
 
@@ -34,9 +36,15 @@ def run_job(jid: str, body: dict) -> None:
     job_file = out.with_suffix(".json")
     job_file.write_text(json.dumps(body | {"out": str(out)}), encoding="utf-8")
     try:
-        rc = subprocess.run([sys.executable, str(HERE / "generate.py"), str(job_file)]).returncode
+        proc = subprocess.Popen([sys.executable, str(HERE / "generate.py"), str(job_file)])
+        with LOCK:
+            PROCS[jid] = proc
+            cancelled = JOBS[jid].get("cancelling")
+        if cancelled:  # the cancel came before the process existed
+            proc.terminate()
+        rc = proc.wait()
         err = Path(str(out) + ".error")
-        if rc == 0 and out.exists():
+        if rc == 0 and out.exists():  # finished before a cancel could stop it: the video is kept
             result = {"output_format": "webm", "frame_count": FRAMES, "fps": FPS, "result_url": f"/sdcpp/v1/jobs/{jid}/result"}
             with LOCK:
                 JOB_FILES[jid] = out  # the file first: a poll that sees "completed" must find it
@@ -44,8 +52,11 @@ def run_job(jid: str, body: dict) -> None:
         else:
             msg = err.read_text(encoding="utf-8") if err.exists() else f"the generation process ended with code {rc}" + \
                   (" (killed: probably out of memory, see README)" if rc in (-9, 137) else "")
-            JOBS[jid] = {"status": "failed", "error": msg}
+            with LOCK:
+                JOBS[jid] = {"status": "cancelled", "error": "job cancelled by client"} if JOBS[jid].get("cancelling") else {"status": "failed", "error": msg}
     finally:
+        with LOCK:
+            PROCS.pop(jid, None)
         if jid not in JOB_FILES:  # a finished video stays until its job is dropped from JOBS
             out.unlink(missing_ok=True)
         for f in (job_file, Path(str(out) + ".error"), Path(str(out) + ".progress"), Path(str(out) + ".progress.tmp")):
@@ -75,7 +86,7 @@ def check(req: dict) -> tuple[dict | None, str]:
     if sample_params is not None and not isinstance(sample_params, dict):
         return None, "sample_params must be an object"
     steps = (sample_params or {}).get("sample_steps", DEFAULT_STEPS)
-    if not isinstance(steps, int) or not MIN_STEPS <= steps <= MAX_STEPS:
+    if isinstance(steps, bool) or not isinstance(steps, int) or not MIN_STEPS <= steps <= MAX_STEPS:
         return None, f"sample_steps must be an integer from {MIN_STEPS} to {MAX_STEPS}"
     negative = req.get("negative_prompt", "")
     if not isinstance(negative, str) or len(negative) > MAX_NEGATIVE:
@@ -134,7 +145,23 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):  # the client left; nobody to tell
                 pass
 
+    def cancel(self, jid: str) -> None:
+        with LOCK:
+            job = JOBS.get(jid)
+            proc = None
+            if job and job["status"] == "running":
+                job["cancelling"] = True  # run_job turns this into the final "cancelled" once the process is gone
+                proc = PROCS.get(jid)
+        if not job:
+            return self.reply(404, {"error": "job not found"})
+        if proc:
+            proc.terminate()  # SIGTERM: nothing in generate.py catches it, so the process and its GPU memory go at once
+        self.reply(200, job)
+
     def do_POST(self):
+        prefix, suffix = "/sdcpp/v1/jobs/", "/cancel"
+        if self.path.startswith(prefix) and self.path.endswith(suffix) and len(self.path) > len(prefix + suffix):
+            return self.cancel(self.path[len(prefix):-len(suffix)])
         if self.path != "/sdcpp/v1/vid_gen":
             return self.reply(404, {"error": "not found"})
         try:

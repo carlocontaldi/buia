@@ -37,7 +37,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
 DATA = Path(os.getenv("DATA_DIR", "/data")).resolve()
 ROOTS = [(DATA / "workspace").resolve(), (DATA / "vault").resolve()]
-MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "workspace/BUIA.md").split(",") if p.strip()]
+MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "workspace/BUIA.md,workspace/memory/*.md,workspace/memory/Projects/*.md").split(",") if p.strip()]
 MEMORY_MAX_CHARS = int(os.getenv("MEMORY_MAX_CHARS", "12000"))  # ~3k tokens of always-loaded memory
 MAX_STEPS = int(os.getenv("MAX_STEPS", "8"))  # tool-call rounds per user message
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))  # chat messages kept per request
@@ -47,7 +47,7 @@ WRITE_SUFFIXES = (".md", ".txt")  # the file tools write notes only: no scripts,
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "*.ts.net"] + [h.strip() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()]
 BOOT = secrets.token_hex(4)  # new on every start: a "pending" marker from another boot belongs to a job that died with its process
 JOBS: set = set()  # running generation jobs (a strong reference, or the event loop may drop them)
-CTX_SIZE = int(os.getenv("CTX_SIZE", "16384"))  # keep equal to llama-server's -c
+CTX_SIZE = int(os.getenv("CTX_SIZE", "20480"))  # keep equal to llama-server's -c
 PROMPT_BUDGET = int(CTX_SIZE * 3 * 0.7)  # chars: assume ~3 chars/token, keep 30% free for tool schemas + the reply
 TZ = ZoneInfo(os.getenv("TZ", "UTC"))
 CHATS = Path(os.getenv("CHATS_DIR", str(DATA / "workspace" / "chats")))  # one JSON file per chat
@@ -373,6 +373,7 @@ SD_VIDEO_URL = os.getenv("SD_VIDEO_URL", "http://sd-video:1234")  # sd-server lo
 VIDEO_MAX_SIDE, VIDEO_MAX_FRAMES, VIDEO_MAX_STEPS = 512, 33, 20
 IMAGE_MAX_SIDE = 768  # not measured yet: raise only after measuring
 VIDEO_TIMEOUT = 900  # seconds to wait for one job
+POLL_LOST = 30  # seconds a server may stay silent (restart, hiccup) before a job is given up; one failed poll must not end a job that still runs
 # CogVideoX-2b (cogvideo service, chosen in the Models panel) has one fixed format; these must equal cogvideo/server.py. Steps: 50 is the model card's value.
 # Not measured on the 8 GB laptop: the timeout is a generous guess, lower the default steps if jobs take too long.
 COG_FORMAT, COG_STEPS, COG_DEFAULT_STEPS, COG_TIMEOUT = (720, 480, 49), (10, 50), 50, 3600
@@ -382,10 +383,31 @@ MEDIA_RE = re.compile(r"\d{8}-\d{6}-[a-z0-9-]+\.(?:png|webp|webm)")
 MEDIA_TOOLS = ("generate_image", "generate_video")  # tools whose result is shown in the chat
 
 
-def _sd_job(kind: str, body: dict, cog: bool = False, on_poll=None) -> tuple[str, list]:
+def _cancel_job(base: str, poll_url: str, kind: str, cog: bool) -> str:
+    """Asks the server to end a job. Returns "asked" (the server reports the job as cancelled by itself), "restarted" (sd-server cannot
+    interrupt a job that is generating, so it was restarted: the job is gone) or "" (the server could not be asked: try again)."""
+    try:
+        r = httpx.post(f"{base}{poll_url}/cancel", timeout=10)
+    except httpx.HTTPError:
+        return ""
+    if cog or r.status_code != 409:  # the cogvideo service stops its process; sd-server cancels a queued job (409: it is already generating)
+        return "asked"
+    sdmodels.restart_server("video" if kind == "vid_gen" else "image")
+    for _ in range(20):  # until the old server is really gone, so that the GPU is free when the job is reported as cancelled
+        time.sleep(1)
+        try:
+            if httpx.get(base + poll_url, timeout=2).status_code != 200:  # a restarted server answers at once, but does not know the job
+                break
+        except httpx.HTTPError:
+            break
+    return "restarted"
+
+
+def _sd_job(kind: str, body: dict, cog: bool = False, on_poll=None, stop=None) -> tuple[str, list]:
     """Run one job on sd-server (kind: img_gen or vid_gen), or on the cogvideo service (cog=True), which speaks the same API.
     Returns (text for the model, media entries for the chat UI). on_poll(job), when given, sees every answer of the server while it works
-    (the Video panel's progress bar); the chat tools do not use it."""
+    (the Video panel's progress bar); stop(), when given, is asked after every poll and ends the job when it returns True (the Video
+    panel's Cancel button). The chat tools use neither."""
     label = "video" if kind == "vid_gen" else "image"
     base = sdmodels.COG_URL if cog else SD_VIDEO_URL if kind == "vid_gen" else SD_URL
     timeout = COG_TIMEOUT if cog else VIDEO_TIMEOUT
@@ -398,13 +420,26 @@ def _sd_job(kind: str, body: dict, cog: bool = False, on_poll=None) -> tuple[str
     if modes and kind not in modes:  # one model at a time: an image request on a video model (or the reverse) cannot work
         return f"error: the sd server runs a model that does not support {kind} (it supports: {', '.join(modes)}). Change the model in SD_ARGS (.env) and restart the sd service.", []
     asyncio.run(models.unload_all())  # the diffusion model needs the GPU; the router reloads the chat model on the next message
+    if stop and stop():  # cancelled while the chat model was unloading: nothing has been started
+        return f"error: {label} job cancelled", []
     t0 = time.time()
     r = httpx.post(f"{base}/sdcpp/v1/{kind}", json=body, timeout=30)
     if r.status_code != 202:
         return f"error: {label} server refused the job: HTTP {r.status_code} {r.text[:200]}", []
     poll_url = r.json()["poll_url"]
+    lost, asked = None, ""  # lost: since when the server has not answered the polls; asked: what _cancel_job answered
     while time.time() - t0 < timeout:
-        j = httpx.get(base + poll_url, timeout=30).json()
+        try:
+            pr = httpx.get(base + poll_url, timeout=30)
+            pr.raise_for_status()
+            j = pr.json()
+        except (httpx.HTTPError, ValueError) as e:
+            lost = lost or time.time()
+            if time.time() - lost > POLL_LOST:
+                return f"error: lost contact with the {label} server for {POLL_LOST} s ({type(e).__name__}); it may still be working on the job", []
+            time.sleep(2)
+            continue
+        lost = None
         if on_poll:
             on_poll(j)
         if j["status"] == "completed":
@@ -437,6 +472,10 @@ def _sd_job(kind: str, body: dict, cog: bool = False, on_poll=None) -> tuple[str
                 [{"kind": label, "url": f"/api/media/{path.name}", "mime": mime, "prompt": body["prompt"]}]
         if j["status"] in ("failed", "cancelled"):
             return f"error: {label} job {j['status']}: {j.get('error')}", []
+        if stop and not asked and stop():  # after the completed check: a video that is already done is kept
+            asked = _cancel_job(base, poll_url, kind, cog)
+            if asked == "restarted":
+                return f"error: {label} job cancelled (the server was restarted to stop it)", []
         time.sleep(1 if on_poll else 2)
     return f"error: {label} job not finished after {timeout} s (the server may still be working on it)", []
 
@@ -479,7 +518,7 @@ def generate_image(prompt: str, width: int = 512, height: int = 512, seed: int =
 SD_LOG_DIR = Path(os.getenv("SD_LOG_DIR", "/sdlogs"))  # the sdlogs volume, read-only: sd-run.sh copies sd-server's output there (it has the sampling steps)
 VIDEO_CAPS = {"side": VIDEO_MAX_SIDE, "frames": VIDEO_MAX_FRAMES, "steps": VIDEO_MAX_STEPS,  # the limits generate_video uses, for the form too
               "cog_steps": COG_STEPS, "cog_default_steps": COG_DEFAULT_STEPS, "cog_format": COG_FORMAT}
-VIDEO_JOBS: dict[str, dict] = {}  # id -> what the panel shows; the newest few. Only the thread running a job and VIDEO_LOCK change an entry.
+VIDEO_JOBS: dict[str, dict] = {}  # id -> what the panel shows; the newest few. Only the thread running a job and (to cancel) video_cancel change an entry, both under VIDEO_LOCK.
 VIDEO_LOCK = threading.Lock()
 VIDEO_KEEP = 5
 
@@ -496,6 +535,7 @@ def video_engine() -> str:
 def video_view(job: dict) -> dict:
     """The job as the panel gets it. Called with VIDEO_LOCK held."""
     out = {k: job.get(k) for k in ("id", "state", "phase", "step", "steps", "percent", "queue", "seed", "prompt", "error", "result", "saved")}
+    out["cancelling"] = bool(job.get("cancel")) and job["state"] == "running"
     out["elapsed"] = round((job.get("finished") or time.time()) - job["started"])
     return out
 
@@ -525,13 +565,15 @@ def run_video_job(job: dict, engine: str, body: dict) -> None:
             pass
 
     try:
-        text, media = _sd_job("vid_gen", body, cog=engine == "cogvideo", on_poll=on_poll)
+        text, media = _sd_job("vid_gen", body, cog=engine == "cogvideo", on_poll=on_poll, stop=lambda: job.get("cancel", False))
     except Exception as e:  # a thread that dies silently leaves a job that never ends
         text, media = f"error: {type(e).__name__}: {e}", []
     with VIDEO_LOCK:
         job["finished"] = time.time()
         if media:
             job.update(state="done", phase="done", percent=100, result=media[0], saved=text.split(". It is already shown", 1)[0])
+        elif job.get("cancel"):  # the user asked for it: not an error
+            job.update(state="cancelled", phase="cancelled")
         else:
             job.update(state="error", phase="error", error=text.removeprefix("error: "))
 
@@ -1009,6 +1051,18 @@ def video_job(jid: str):
         if jid not in VIDEO_JOBS:
             raise HTTPException(404, "no such job")
         return video_view(VIDEO_JOBS[jid])
+
+
+@app.post("/api/video/jobs/{jid}/cancel")
+def video_cancel(jid: str):
+    """Ends a running job. The panel sees "cancelling" until the server has really stopped (so that the GPU is free), then "cancelled"."""
+    with VIDEO_LOCK:
+        if jid not in VIDEO_JOBS:
+            raise HTTPException(404, "no such job")
+        job = VIDEO_JOBS[jid]
+        if job["state"] == "running":
+            job["cancel"] = True
+        return video_view(job)
 
 
 @app.get("/api/media/{name}")

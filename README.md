@@ -146,6 +146,8 @@ button; the video server restarts and the form waits for it), write the prompt a
   (read-only). After an update, `.\update.cmd` recreates the services with it. Without the volume the bar is not filled and shows what is happening and the elapsed time.
 - One video at a time: the chat refuses new messages while it runs, because its model would load next to the video model, and the chat model is unloaded before the job like it is for
   `generate_video`. Reloading the page shows the running job again. The video is saved in `generated\` inside your workspace folder (it is not added to a chat).
+- **Cancel** under the bar ends the job (and frees the chat again). CogVideoX is stopped at once. stable-diffusion.cpp's server cannot interrupt a job that is
+  generating, so the video server is restarted instead (`sd-run.sh` does it, a few seconds; the model loads again on the next job). A video that finishes at the same moment is kept.
 
 ### CogVideoX 2B (optional second video engine)
 
