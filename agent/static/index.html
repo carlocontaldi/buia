@@ -48,7 +48,7 @@
   .q button { margin-top: 6px; padding: 4px 12px; }
   .q button:disabled { background: #8886; }
   #msg { font-size: 12px; color: #dc2626; min-height: 1em; }
-  #repo { width: 100%; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }
+  #repo, .sd-repo { width: 100%; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }  /* .sd-repo: the field sd-custom.js adds */
   .chip { display: inline-block; font: inherit; font-size: 12px; margin: 4px 6px 0 0; padding: 2px 8px; border: 0; border-radius: 99px; background: var(--bot); color: var(--fg); cursor: pointer; }
   progress { flex: 0 0 90px; }
   .row { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
@@ -83,8 +83,8 @@
   :root[data-theme="buia"] #panel, :root[data-theme="buia"] #mpanel, :root[data-theme="buia"] #vpanel, :root[data-theme="buia"] #gpanel { top: 84px; background: #020b07f2; backdrop-filter: blur(14px); }
   :root[data-theme="buia"] #status::before { content: ""; display: inline-block; width: 16px; height: 16px; margin-right: 8px; vertical-align: -3px; background: url(/buia-icon-64.png) center / contain no-repeat; }
   :root[data-theme="buia"] #thinkl { font-size: 13px; }
-  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin) { background: #0c1f19; border: 1px solid #1d4633; border-radius: 12px; color: var(--fg); }
-  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin):focus { outline: none; border-color: #3df97a99; box-shadow: 0 0 0 3px #3df97a22; }
+  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin, .sd-repo) { background: #0c1f19; border: 1px solid #1d4633; border-radius: 12px; color: var(--fg); }
+  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin, .sd-repo):focus { outline: none; border-color: #3df97a99; box-shadow: 0 0 0 3px #3df97a22; }
   :root[data-theme="buia"] #msel { padding: 6px 8px; }
   :root[data-theme="buia"] #box { border-radius: 18px; padding: 12px 14px; }
   :root[data-theme="buia"] button { background: var(--btn); color: #fff; border: 1px solid #3df97a55; border-radius: 999px; font-weight: 600; cursor: pointer; }
