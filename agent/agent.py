@@ -142,7 +142,9 @@ def release_unstarted_chat(cid: str, owner: str) -> None:
     release = False
     try:
         with CHAT_LOCK:
-            if cid not in ACTIVE_CHATS:
+            with GPU_LOCK:
+                mine = GPU_OWNER == owner
+            if cid not in ACTIVE_CHATS or not mine:  # run() already ended this turn, or a later turn of the chat holds the GPU now
                 return
             release = True
             try:
@@ -150,7 +152,7 @@ def release_unstarted_chat(cid: str, owner: str) -> None:
                 last = chat["messages"][-1] if chat["messages"] else None
                 if last and last.get("role") == "user" and last.get("in_progress", {}).get("boot") == BOOT:
                     last.pop("in_progress")
-                    chat["messages"].append({"role": "assistant", "content": "[interrupted before a response was received]"})
+                    chat["messages"].append({"role": "assistant", "content": "[interrupted before a response was received]", "notice": True})
                     save_chat(chat)
             finally:
                 ACTIVE_CHATS.discard(cid)
@@ -245,6 +247,8 @@ def search_files(query: str, path: str = "", offset: int = 0, limit: int = 40) -
                 break
         if has_more:
             break
+    if offset and not page:
+        return f"no matches at offset {offset}; {matched} in total"
     footer = f"[showing {offset + 1}-{offset + len(page)}; call search_files again with offset={offset + len(page)}]" if has_more else (
         f"[showing {offset + 1}-{offset + len(page)} of {offset + len(page)}]" if offset else "")
     return "\n".join(page + ([footer] if footer else [])) or "no matches"
@@ -855,7 +859,7 @@ def load_chat(cid: str) -> dict:
             if m.get("role") == "user":
                 recovered_user_turn = True
     if recovered_user_turn:
-        chat["messages"].append({"role": "assistant", "content": "[the agent restarted before it finished generating; ask again if you still need help]"})
+        chat["messages"].append({"role": "assistant", "content": "[the agent restarted before it finished generating; ask again if you still need help]", "notice": True})
         save_chat(chat)
     return chat
 
@@ -944,7 +948,10 @@ def history_for_model(chat_msgs: list) -> list:
     not just the short reply: with bare replies ("Here is your picture.") in the history, the model copies them and
     answers the next request without calling the tool, so nothing is generated."""
     out, n = [], 0
-    for m in chat_msgs:
+    for i, m in enumerate(chat_msgs):
+        after = chat_msgs[i + 1] if i + 1 < len(chat_msgs) else {}
+        if m.get("notice") or (m["role"] == "user" and after.get("notice")):  # a turn the model never answered: replaying the question alone would put two user turns in a row
+            continue
         done = [t for t in m.get("trace") or [] if t.get("tool") in MEDIA_TOOLS and str(t.get("result", "")).startswith("saved ")] \
             if m["role"] == "assistant" else []
         if done:
@@ -1055,6 +1062,7 @@ async def run(chat: dict, think: bool | None = None, gpu_owner: str = ""):
     finally:  # also runs when the client disconnects (Stop button, closed tab)
         if chat["messages"] and chat["messages"][-1].get("role") == "user":
             chat["messages"][-1].pop("in_progress", None)
+        notice = False  # True: the model sent nothing, the reply is only a note for the user
         if finished:
             reply = text or "(empty reply)"
         elif job:  # the client left while a job was running: keep the turn; finish_job() completes it
@@ -1062,8 +1070,9 @@ async def run(chat: dict, think: bool | None = None, gpu_owner: str = ""):
         elif text or media:  # media is already shown to the user and saved on disk: keep it in the chat
             reply = (text + "\n" if text else "") + "[interrupted]"
         else:
-            reply = "[interrupted before a response was received]"
+            reply, notice = "[interrupted before a response was received]", True
         chat["messages"].append({"role": "assistant", "content": reply, "trace": trace,
+                                 **({"notice": True} if notice else {}),
                                  **({"thinking": thought} if thought else {}),
                                  **({"media": media} if media else {}),
                                  **({"pending": {"job": job[0], "boot": BOOT, "tool": job[1]}} if job else {})})
