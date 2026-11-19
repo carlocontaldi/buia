@@ -20,7 +20,7 @@ services:
     # NB: no '#' comments inside the command block below, YAML would pass them to llama-server as arguments.
     command: >-
       --jinja
-      -c ${CTX_SIZE:-16384}
+      -c ${CTX_SIZE:-20480}
       -np 1
       --flash-attn on
       -ctk ${KV_CACHE_TYPE:-q8_0} -ctv ${KV_CACHE_TYPE:-q8_0}
@@ -44,11 +44,14 @@ services:
     depends_on: [llama]
     environment:
       LLAMA_URL: http://llama:8080
-      CTX_SIZE: ${CTX_SIZE:-16384}     # same values as llama-server: the agent trims prompts and sizes KV estimates with them
+      CTX_SIZE: ${CTX_SIZE:-20480}     # same values as llama-server: the agent trims prompts and sizes KV estimates with them
       KV_CACHE_TYPE: ${KV_CACHE_TYPE:-q8_0}
       HF_TOKEN: ${HF_TOKEN:-}
       GPU_VRAM_MB: ${GPU_VRAM_MB:-}    # optional manual VRAM size if nvidia-smi is not visible in this container
-      MEMORY_FILES: ${MEMORY_FILES:-workspace/BUIA.md}
+      MEMORY_FILES: ${MEMORY_FILES:-workspace/BUIA.md,workspace/memory/*.md,workspace/memory/Projects/*.md}
+      MEMORY_MAX_CHARS: ${MEMORY_MAX_CHARS:-12000}   # size of the always-loaded memory (agent/agent.py)
+      MAX_STEPS: ${MAX_STEPS:-8}                   # tool-call rounds per user message
+      MAX_HISTORY: ${MAX_HISTORY:-20}               # chat messages sent to the model per request
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}   # extra host names the web UI may be opened under (localhost, 127.0.0.1 and *.ts.net always work)
       TZ: ${TZ:-UTC}
       BUIA_PASSWORD: ${BUIA_PASSWORD:-}   # web UI login password; empty = nobody can log in
@@ -124,7 +127,7 @@ services:
         target: /sd-run.sh
         read_only: true
       - type: bind
-        source: ./sdmodels   # relative to the folder holding this compose file (buia-stack), next to ./sdcpp
+        source: ./sdmodels   # relative to the folder holding this compose file, next to ./sdcpp
         target: /models
         read_only: true
       - type: volume

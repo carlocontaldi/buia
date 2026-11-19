@@ -19,6 +19,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -133,6 +134,17 @@ def put(path: Path, text: str) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text + "\n")
     os.replace(tmp, path)
+
+
+def restart_server(kind: str) -> None:
+    """Makes sd-run.sh restart the sd-server of this kind with the flags it has now (it restarts on any change of the modification time of
+    active-<kind>.args, in whole seconds). The only way to end a job that is generating: sd-server cannot interrupt one."""
+    f = SD_DIR / f"active-{kind}.args"
+    try:
+        t = max(time.time(), int(f.stat().st_mtime) + 1)
+        os.utime(f, (t, t))
+    except FileNotFoundError:
+        f.touch()  # no file = the server runs on the flags of .env; an empty file means the same to sd-run.sh, and its creation restarts it
 
 
 # ---------- custom models from any Hugging Face repo (same families as the presets) ----------

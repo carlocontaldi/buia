@@ -47,13 +47,25 @@ class Fake(BaseHTTPRequestHandler):
     logs: list = []
     log_path: Path | None = None
     polls = 0
+    fail_polls = 0  # the first this many polls answer HTTP 500
     posted: list = []
+    cancels: list = []  # paths of the cancel requests
+    cancel_code = 200  # 200: the job is cancelled (queued sd job, cogvideo); 409: sd-server cannot interrupt a job that is generating
+    dropped = False  # the old server went away (it was restarted): the job is unknown to the new one
+    dropped_polls = 0
 
     def do_GET(self):
         if self.path == "/sdcpp/v1/capabilities":
             return self.send_json(200, {"supported_modes": ["img_gen", "vid_gen"]})
         if self.path == "/sdcpp/v1/jobs/1":
+            if Fake.dropped:  # a restarted server is up again at once, but does not know the job
+                Fake.dropped_polls += 1
+                return self.send_json(404, {"error": "job not found"})
             i, Fake.polls = Fake.polls, Fake.polls + 1
+            if i < Fake.fail_polls:
+                return self.send_json(500, {"error": "boom"})
+            if Fake.cancels and Fake.cancel_code == 200:
+                return self.send_json(200, {"status": "cancelled", "error": "job cancelled by client"})
             if self.log_path and i < len(self.logs) and self.logs[i]:
                 with self.log_path.open("a", encoding="utf-8") as f:
                     f.write(self.logs[i])
@@ -61,6 +73,9 @@ class Fake(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path.endswith("/cancel"):
+            Fake.cancels.append(self.path)
+            return self.send_json(Fake.cancel_code, {})
         Fake.posted.append(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)))))
         self.send_json(202, {"poll_url": "/sdcpp/v1/jobs/1"})
 
@@ -99,7 +114,8 @@ class VideoApiTests(unittest.TestCase):
         self.saved = (agent.SD_VIDEO_URL, agent.sdmodels.COG_URL, agent.models.unload_all, agent.SD_LOG_DIR)
         agent.SD_VIDEO_URL = agent.sdmodels.COG_URL = self.url
         agent.models.unload_all, agent.SD_LOG_DIR = no_unload, self.logdir
-        Fake.script, Fake.logs, Fake.log_path, Fake.polls, Fake.posted = [DONE], [], self.logdir / "active-video.log", 0, []
+        Fake.script, Fake.logs, Fake.log_path, Fake.polls, Fake.posted, Fake.fail_polls = [DONE], [], self.logdir / "active-video.log", 0, [], 0
+        Fake.cancels, Fake.cancel_code, Fake.dropped, Fake.dropped_polls = [], 200, False, 0
         agent.VIDEO_JOBS.clear()
         shutil.rmtree(agent.GENERATED, ignore_errors=True)
         self.sleeps = patch.object(agent.time, "sleep", self.record)
@@ -203,6 +219,88 @@ class VideoApiTests(unittest.TestCase):
         self.assertEqual(j["state"], "error")
         self.assertIn("out of memory", j["error"])
         self.assertNotIn("error:", j["error"][:6])
+
+    def test_a_poll_that_fails_once_does_not_end_the_job(self):
+        Fake.fail_polls = 2
+        j = self.finish(self.start().json()["id"])
+        self.assertEqual((j["state"], Fake.polls), ("done", 3))
+
+    def test_a_server_that_stays_silent_is_an_error_after_a_while(self):
+        Fake.fail_polls = 10**6
+        with patch.object(agent, "POLL_LOST", 0.3):
+            j = self.finish(self.start().json()["id"])
+        self.assertEqual(j["state"], "error")
+        self.assertIn("lost contact", j["error"])
+
+    # ---- Cancel
+    GENERATING = {"status": "generating"}
+
+    def wait_polled(self):
+        for _ in range(400):
+            if Fake.polls:
+                return
+            threading.Event().wait(0.02)
+        self.fail("the job never polled the server")
+
+    def test_cancelling_a_cogvideo_job_asks_the_service_and_ends_as_cancelled(self):
+        Fake.script = [{"status": "running", "progress": {"phase": "sampling", "step": 3, "steps": 50}}]
+        jid = self.start(engine_cog=True).json()["id"]
+        self.wait_polled()
+        with patch.object(agent.sdmodels, "restart_server") as restart:
+            r = self.client.post(f"/api/video/jobs/{jid}/cancel")
+            self.assertEqual((r.status_code, r.json()["cancelling"]), (200, True))
+            j = self.finish(jid)
+        self.assertEqual((j["state"], j["cancelling"], j["error"]), ("cancelled", False, None))
+        self.assertEqual(Fake.cancels, ["/sdcpp/v1/jobs/1/cancel"])
+        restart.assert_not_called()  # the service stops its own process
+        self.assertFalse(agent.video_busy())
+
+    def test_cancelling_a_queued_sd_job_needs_no_restart(self):
+        Fake.script = [{"status": "queued", "queue_position": 1}]
+        jid = self.start().json()["id"]
+        self.wait_polled()
+        with patch.object(agent.sdmodels, "restart_server") as restart:
+            self.client.post(f"/api/video/jobs/{jid}/cancel")
+            j = self.finish(jid)
+        self.assertEqual(j["state"], "cancelled")
+        restart.assert_not_called()
+
+    def test_cancelling_a_generating_sd_job_restarts_the_server_and_waits_until_it_is_gone(self):
+        Fake.script, Fake.cancel_code = [self.GENERATING], 409  # sd-server: "cannot be interrupted yet"
+
+        def restart(kind):
+            Fake.dropped = True
+            self.restarted = kind
+        jid = self.start().json()["id"]
+        self.wait_polled()
+        with patch.object(agent.sdmodels, "restart_server", restart):
+            self.client.post(f"/api/video/jobs/{jid}/cancel")
+            j = self.finish(jid)
+        self.assertEqual((j["state"], self.restarted), ("cancelled", "video"))
+        self.assertGreaterEqual(Fake.dropped_polls, 1)  # the job was not reported as cancelled before the old server was gone
+        self.assertFalse(agent.video_busy())
+
+    def test_cancelling_twice_or_a_finished_job_is_harmless(self):
+        jid = self.start().json()["id"]
+        self.finish(jid)
+        r = self.client.post(f"/api/video/jobs/{jid}/cancel")
+        self.assertEqual((r.status_code, r.json()["state"], r.json()["cancelling"]), (200, "done", False))
+        self.assertEqual(Fake.cancels, [])  # nothing to stop: the server was not asked
+        self.assertEqual(self.client.post("/api/video/jobs/nope/cancel").status_code, 404)
+
+    def test_a_video_that_is_already_done_is_kept_even_if_cancel_was_pressed(self):
+        calls = []
+        text, media = agent._sd_job("vid_gen", {"prompt": "x", "width": 256, "height": 256}, stop=lambda: calls.append(1) or len(calls) > 1)
+        self.assertTrue(media, text)
+        self.assertEqual(Fake.cancels, [])
+
+    def test_a_cancel_before_the_job_was_sent_sends_nothing(self):
+        text, media = agent._sd_job("vid_gen", {"prompt": "x", "width": 256, "height": 256}, stop=lambda: True)
+        self.assertEqual((text, media, Fake.posted), ("error: video job cancelled", [], []))
+
+    def test_cancel_needs_the_login(self):
+        with TestClient(agent.app, base_url="http://localhost") as anon:
+            self.assertEqual(anon.post("/api/video/jobs/x/cancel").status_code, 401)
 
     def test_server_that_is_not_running_is_an_error_not_a_hang(self):
         with patch.object(agent, "SD_VIDEO_URL", "http://127.0.0.1:9"):

@@ -1,5 +1,5 @@
 // "Check any Hugging Face repo" box for the image/video section of the Models panel.
-// Load with <script src="static/sd-custom.js" defer></script>. Added models appear in the
+// Load with <script src="sd-custom.js" defer></script> (the static folder is served from /). Added models appear in the
 // existing preset list (Download, then Use); the fit badge is already in the model name.
 (() => {
   if (window.__buiaSdCustom) return;
@@ -14,10 +14,9 @@
   let mounted = false;
   const mount = () => {
     if (mounted) return true;
-    const h = [...document.querySelectorAll("h1,h2,h3,h4,summary,b,strong,div,span")]
-      .find(e => /Image and video models/i.test(e.textContent || "") && e.children.length <= 2);
-    if (!h) return false;
-    (h.closest("section,details,div") || h.parentElement || document.body).insertAdjacentElement("afterend", box);
+    const list = document.getElementById("sdlist");  // the image/video list inside the Models panel (index.html)
+    if (!list) return false;
+    list.insertAdjacentElement("beforebegin", box);
     mounted = true;
     return true;
   };

@@ -24,7 +24,7 @@ from pydantic import BaseModel
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
 HF = os.getenv("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-CTX_SIZE = int(os.getenv("CTX_SIZE", "16384"))  # same value llama-server runs with
+CTX_SIZE = int(os.getenv("CTX_SIZE", "20480"))  # same value llama-server runs with
 KV_TYPE = os.getenv("KV_CACHE_TYPE", "q8_0")  # same value llama-server runs with
 KV_BPE = {"f32": 4.0, "f16": 2.0, "bf16": 2.0, "q8_0": 34 / 32, "q5_1": 24 / 32, "q5_0": 22 / 32,
           "q4_1": 20 / 32, "q4_0": 18 / 32}  # bytes per KV element
