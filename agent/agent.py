@@ -28,10 +28,11 @@ import httpx
 import models
 import sdmodels
 import videogen
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
@@ -47,6 +48,10 @@ WRITE_SUFFIXES = (".md", ".txt")  # the file tools write notes only: no scripts,
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "*.ts.net"] + [h.strip() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()]
 BOOT = secrets.token_hex(4)  # new on every start: a "pending" marker from another boot belongs to a job that died with its process
 JOBS: set = set()  # running generation jobs (a strong reference, or the event loop may drop them)
+CHAT_LOCK = threading.Lock()
+ACTIVE_CHATS: set[str] = set()
+GPU_LOCK = threading.Lock()
+GPU_OWNER: str | None = None
 CTX_SIZE = int(os.getenv("CTX_SIZE", "20480"))  # keep equal to llama-server's -c
 PROMPT_BUDGET = int(CTX_SIZE * 3 * 0.7)  # chars: assume ~3 chars/token, keep 30% free for tool schemas + the reply
 TZ = ZoneInfo(os.getenv("TZ", "UTC"))
@@ -117,16 +122,57 @@ def rel(p: Path) -> str:
     return p.relative_to(DATA).as_posix()
 
 
-def list_dir(path: str = "") -> str:
+def reserve_gpu(owner: str) -> bool:
+    global GPU_OWNER
+    with GPU_LOCK:
+        if GPU_OWNER is not None:
+            return False
+        GPU_OWNER = owner
+        return True
+
+
+def release_gpu(owner: str) -> None:
+    global GPU_OWNER
+    with GPU_LOCK:
+        if GPU_OWNER == owner:
+            GPU_OWNER = None
+
+
+def release_unstarted_chat(cid: str, owner: str) -> None:
+    release = False
+    try:
+        with CHAT_LOCK:
+            if cid not in ACTIVE_CHATS:
+                return
+            release = True
+            try:
+                chat = load_chat(cid)
+                last = chat["messages"][-1] if chat["messages"] else None
+                if last and last.get("role") == "user" and last.get("in_progress", {}).get("boot") == BOOT:
+                    last.pop("in_progress")
+                    chat["messages"].append({"role": "assistant", "content": "[interrupted before a response was received]"})
+                    save_chat(chat)
+            finally:
+                ACTIVE_CHATS.discard(cid)
+    finally:
+        if release:
+            release_gpu(owner)
+
+
+def list_dir(path: str = "", offset: int = 0, limit: int = 200) -> str:
     if not path.strip("/ "):
         return "workspace/\nvault/"
+    offset, limit = max(0, int(offset)), max(1, min(int(limit), 200))
     p = safe(path)
     if not p.is_dir():
         return "error: not a directory"
     items = sorted((i for i in p.iterdir() if not i.name.startswith(".")), key=lambda i: (i.is_file(), i.name.lower()))
-    lines = [i.name + ("/" if i.is_dir() else "") for i in items[:200]]
-    if len(items) > 200:
-        lines.append(f"... {len(items) - 200} more")
+    page = items[offset:offset + limit]
+    lines = [i.name + ("/" if i.is_dir() else "") for i in page]
+    if offset + len(page) < len(items):
+        lines.append(f"[items {offset}-{offset + len(page) - 1} of {len(items)}; call list_dir again with offset={offset + len(page)}]")
+    elif offset:
+        lines.append(f"[items {offset}-{offset + len(page) - 1} of {len(items)}]")
     return "\n".join(lines) or "(empty)"
 
 
@@ -150,33 +196,58 @@ def read_file(path: str, offset: int = 0) -> str:
     return chunk
 
 
-def search_files(query: str, path: str = "") -> str:
+def search_files(query: str, path: str = "", offset: int = 0, limit: int = 40) -> str:
     roots = [safe(path)] if path.strip("/ ") else ROOTS
     terms = query.lower().split()
     if not terms:
         return "error: empty query"
-    hits = []
+    offset, limit = max(0, int(offset)), max(1, min(int(limit), 100))
+    matched, page, has_more = 0, [], False
+
+    def add(hit: str) -> bool:
+        nonlocal matched, has_more
+        if matched >= offset + limit:
+            has_more = True
+            return False
+        if matched >= offset:
+            page.append(hit)
+        matched += 1
+        return True
+
     for root in roots:
         if not root.is_dir():
             return "error: path is not a directory"
-        for f in sorted(root.rglob("*.md")):
+        files = sorted((f for f in root.rglob("*") if f.suffix.lower() in WRITE_SUFFIXES), key=lambda f: f.as_posix().lower())
+        for f in files:
             parts = f.relative_to(root).parts
             if any(x.startswith(".") for x in parts) or not f.is_file():
                 continue
-            if protected(f):
+            try:
+                resolved = f.resolve()
+                if not resolved.is_relative_to(root.resolve()):
+                    continue
+            except (OSError, RuntimeError):
+                continue
+            if protected(resolved):
                 continue
             if all(t in f.stem.lower() for t in terms):
-                hits.append(f"{rel(f)}  (file name match)")
+                if not add(f"{rel(resolved)}  (file name match)"):
+                    break
             try:
-                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+                lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
             except OSError:
                 continue
             for n, line in enumerate(lines, 1):
                 if all(t in line.lower() for t in terms):
-                    hits.append(f"{rel(f)}:{n}: {line.strip()[:200]}")
-            if len(hits) >= 40:
-                return "\n".join(hits[:40]) + "\n[first 40 hits shown; narrow the query or path]"
-    return "\n".join(hits) or "no matches"
+                    if not add(f"{rel(resolved)}:{n}: {line.strip()[:200]}"):
+                        break
+            if has_more:
+                break
+        if has_more:
+            break
+    footer = f"[showing {offset + 1}-{offset + len(page)}; call search_files again with offset={offset + len(page)}]" if has_more else (
+        f"[showing {offset + 1}-{offset + len(page)} of {offset + len(page)}]" if offset else "")
+    return "\n".join(page + ([footer] if footer else [])) or "no matches"
 
 
 def safe_write(path: str) -> Path:
@@ -192,7 +263,14 @@ def write_file(path: str, content: str, overwrite: bool = False) -> str:
     if p.exists() and overwrite is not True:  # "false" or "no" from a small model must not count as true
         return "error: file exists. Use append_file, or call again with overwrite=true if the user asked for it."
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, p)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     return f"wrote {rel(p)} ({len(content)} chars)"
 
 
@@ -462,7 +540,7 @@ def _sd_job(kind: str, body: dict, cog: bool = False, on_poll=None, stop=None) -
                 raw, detail = base64.b64decode(res["images"][0]["b64_json"]), ""
             GENERATED.mkdir(parents=True, exist_ok=True)
             slug = re.sub(r"[^a-z0-9]+", "-", body["prompt"].lower())[:40].strip("-") or label
-            path = GENERATED / f"{datetime.now(TZ).strftime('%Y%m%d-%H%M%S')}-{slug}.{res['output_format']}"
+            path = GENERATED / f"{datetime.now(TZ).strftime('%Y%m%d-%H%M%S')}-{slug}-{secrets.token_hex(8)}.{res['output_format']}"
             path.write_bytes(raw)
             out = f"saved {rel(path)} ({detail}{body['width']}x{body['height']}, {time.time() - t0:.0f} s)"
             mime = MEDIA_MIME.get(res["output_format"])
@@ -541,41 +619,44 @@ def video_view(job: dict) -> dict:
 
 
 def run_video_job(job: dict, engine: str, body: dict) -> None:
-    tail = None if engine == "cogvideo" else videogen.LogTail(SD_LOG_DIR / videogen.LOG_NAME)  # made before the job starts: only its output counts
-    sd_progress = videogen.SdProgress()
-
-    def on_poll(j: dict) -> None:
-        try:
-            if j.get("status") == "queued":
-                phase, step, steps = "queued", 0, 0
-            elif engine == "cogvideo":
-                p = j.get("progress") or {}
-                phase, step, steps = p.get("phase"), p.get("step", 0), p.get("steps", 0)
-                if phase not in videogen.SHARE or not isinstance(step, int) or not isinstance(steps, int):
-                    phase, step, steps = "starting", 0, 0
-            elif tail.exists():
-                sd_progress.feed(tail.read())
-                phase, step, steps = sd_progress.snapshot()
-            else:  # no log volume: the server works, only its steps cannot be seen
-                phase, step, steps = "running", 0, 0
-            with VIDEO_LOCK:
-                job.update(phase=phase, step=step, steps=steps, queue=j.get("queue_position") or 0,
-                           percent=videogen.percent(phase, step, steps) if phase in videogen.SHARE else None)
-        except Exception:  # the bar is only information: it must never cost the video
-            pass
-
     try:
+        tail = None if engine == "cogvideo" else videogen.LogTail(SD_LOG_DIR / videogen.LOG_NAME)  # made before the job starts: only its output counts
+        sd_progress = videogen.SdProgress()
+
+        def on_poll(j: dict) -> None:
+            try:
+                if j.get("status") == "queued":
+                    phase, step, steps = "queued", 0, 0
+                elif engine == "cogvideo":
+                    p = j.get("progress") or {}
+                    phase, step, steps = p.get("phase"), p.get("step", 0), p.get("steps", 0)
+                    if phase not in videogen.SHARE or not isinstance(step, int) or not isinstance(steps, int):
+                        phase, step, steps = "starting", 0, 0
+                elif tail.exists():
+                    sd_progress.feed(tail.read())
+                    phase, step, steps = sd_progress.snapshot()
+                else:  # no log volume: the server works, only its steps cannot be seen
+                    phase, step, steps = "running", 0, 0
+                with VIDEO_LOCK:
+                    job.update(phase=phase, step=step, steps=steps, queue=j.get("queue_position") or 0,
+                               percent=videogen.percent(phase, step, steps) if phase in videogen.SHARE else None)
+            except Exception:  # the bar is only information: it must never cost the video
+                pass
+
         text, media = _sd_job("vid_gen", body, cog=engine == "cogvideo", on_poll=on_poll, stop=lambda: job.get("cancel", False))
+        with VIDEO_LOCK:
+            job["finished"] = time.time()
+            if media:
+                job.update(state="done", phase="done", percent=100, result=media[0], saved=text.split(". It is already shown", 1)[0])
+            elif job.get("cancel"):  # the user asked for it: not an error
+                job.update(state="cancelled", phase="cancelled")
+            else:
+                job.update(state="error", phase="error", error=text.removeprefix("error: "))
     except Exception as e:  # a thread that dies silently leaves a job that never ends
-        text, media = f"error: {type(e).__name__}: {e}", []
-    with VIDEO_LOCK:
-        job["finished"] = time.time()
-        if media:
-            job.update(state="done", phase="done", percent=100, result=media[0], saved=text.split(". It is already shown", 1)[0])
-        elif job.get("cancel"):  # the user asked for it: not an error
-            job.update(state="cancelled", phase="cancelled")
-        else:
-            job.update(state="error", phase="error", error=text.removeprefix("error: "))
+        with VIDEO_LOCK:
+            job.update(finished=time.time(), state="error", phase="error", error=f"{type(e).__name__}: {e}")
+    finally:
+        release_gpu(job.get("gpu_owner", ""))
 
 
 IMPL = {f.__name__: f for f in (list_dir, read_file, search_files, write_file, append_file, generate_video, generate_image)}
@@ -591,10 +672,10 @@ def fn(name, desc, props, required):
 
 
 TOOLS = [
-    fn("list_dir", "List a directory. Empty path lists the roots (workspace/, vault/).", {"path": S}, []),
+    fn("list_dir", "List a directory. Empty path lists the roots (workspace/, vault/). Page with offset (default 0, up to 200 items).", {"path": S, "offset": I, "limit": I}, []),
     fn("read_file", "Read a text file. Long files are paged with offset.", {"path": S, "offset": {"type": "integer"}}, ["path"]),
-    fn("search_files", "Search .md files. Every word must appear in a line or in the file name. Empty path searches workspace and vault.",
-       {"query": S, "path": S}, ["query"]),
+    fn("search_files", "Search .md and .txt notes. Every word must appear in a line or in the file name. Empty path searches workspace and vault. Page with offset (default 0, up to 100 hits).",
+       {"query": S, "path": S, "offset": I, "limit": I}, ["query"]),
     fn("write_file", "Create a new file. Fails if it exists unless overwrite is true.",
        {"path": S, "content": S, "overwrite": {"type": "boolean"}}, ["path", "content"]),
     fn("append_file", "Append text to the end of a file (created if missing). Use this for memory notes.",
@@ -734,15 +815,48 @@ def new_chat() -> dict:
     return {"id": cid, "title": "", "created": now_iso(), "updated": now_iso(), "messages": []}
 
 
+def valid_chat(chat, cid: str) -> bool:
+    if (not isinstance(chat, dict) or chat.get("id") != cid or not isinstance(chat.get("messages"), list)
+            or any(k in chat and not isinstance(chat[k], str) for k in ("title", "created", "updated"))):
+        return False
+    for message in chat["messages"]:
+        if (not isinstance(message, dict) or message.get("role") not in ("user", "assistant")
+                or not isinstance(message.get("content"), str)
+                or any(k in message and not isinstance(message[k], dict) for k in ("pending", "in_progress"))):
+            return False
+        if ("thinking" in message and not isinstance(message["thinking"], str)
+                or "trace" in message and (not isinstance(message["trace"], list)
+                                            or any(not isinstance(trace, dict) for trace in message["trace"]))):
+            return False
+        if "media" in message and (not isinstance(message["media"], list)
+                                    or any(not isinstance(media, dict) or not isinstance(media.get("url"), str)
+                                           for media in message["media"])):
+            return False
+    return True
+
+
 def load_chat(cid: str) -> dict:
     p = chat_path(cid)
     if not p.is_file():
         raise HTTPException(404, "no such chat")
-    chat = json.loads(p.read_text(encoding="utf-8"))
+    try:
+        chat = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(422, "saved chat is not valid JSON; the original file is still available for download") from None
+    if not valid_chat(chat, cid):
+        raise HTTPException(422, "saved chat has an invalid structure; the original file is still available for download")
+    recovered_user_turn = False
     for m in chat["messages"]:  # a generation job from before the last restart is gone: do not show it as running forever
         if m.get("pending") and m["pending"].get("boot") != BOOT:
             m.pop("pending")
             m["content"] = m["content"] or "[the agent restarted while this was generating; if it finished, the file is in workspace/generated/]"
+        if m.get("in_progress") and m["in_progress"].get("boot") != BOOT:
+            m.pop("in_progress")
+            if m.get("role") == "user":
+                recovered_user_turn = True
+    if recovered_user_turn:
+        chat["messages"].append({"role": "assistant", "content": "[the agent restarted before it finished generating; ask again if you still need help]"})
+        save_chat(chat)
     return chat
 
 
@@ -754,16 +868,25 @@ def save_chat(chat: dict) -> None:
     chat["updated"] = now_iso()
     CHATS.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=CHATS, suffix=".tmp")  # write + rename: no half-written files
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(chat, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, p)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(chat, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, p)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 # ---------- streaming from llama-server ----------
+class IncompleteStreamError(RuntimeError):
+    pass
+
+
 async def llm_stream(msgs, think: bool | None = None):
     """Yield ("reasoning", text) / ("delta", text) while tokens arrive, ("length", "") if the context
-    filled up, then ("message", assistant_msg). think=None leaves the model's own default."""
-    content, reasoning, calls, finish = "", "", {}, None
+    filled up, then ("message", assistant_msg). Raises IncompleteStreamError if EOF arrives without a completion signal.
+    think=None leaves the model's own default."""
+    content, reasoning, calls, finish, complete = "", "", {}, None, False
     model = await models.resolve_model()  # router mode: the request must name the model
     payload = {"model": model, "messages": msgs, "tools": TOOLS, "stream": True}
     if think is not None:  # a template argument, applied by llama-server (--jinja) on every request
@@ -778,10 +901,13 @@ async def llm_stream(msgs, think: bool | None = None):
                     continue
                 data = line[5:].strip()
                 if data == "[DONE]":
+                    complete = True
                     break
                 choices = json.loads(data).get("choices") or []
                 d = (choices[0].get("delta") or {}) if choices else {}
-                finish = (choices[0].get("finish_reason") if choices else None) or finish
+                reason = choices[0].get("finish_reason") if choices else None
+                if reason:
+                    finish, complete = reason, True
                 if d.get("reasoning_content"):
                     reasoning += d["reasoning_content"]
                     yield "reasoning", d["reasoning_content"]
@@ -795,6 +921,8 @@ async def llm_stream(msgs, think: bool | None = None):
                     slot["name"] = slot["name"] or f.get("name") or ""
                     a = f.get("arguments") or ""
                     slot["args"] += a if isinstance(a, str) else json.dumps(a)
+    if not complete:
+        raise IncompleteStreamError("LLM stream ended without a completion signal")
     msg = {"role": "assistant", "content": content or None}
     if reasoning:
         msg["reasoning_content"] = reasoning
@@ -837,33 +965,36 @@ def finish_job(cid: str, job: tuple, task: asyncio.Task) -> None:
         out, media = task.result()
     except BaseException as e:  # call_tool does not raise; this is a cancelled task at shutdown
         out, media = f"error: {type(e).__name__}: {e}", []
-    try:
-        chat = load_chat(cid)
-    except Exception:  # the chat was deleted meanwhile: the file stays in generated/
-        return
-    m = next((m for m in chat["messages"] if (m.get("pending") or {}).get("job") == jid), None)
-    if not m:
-        return
-    m.pop("pending")
-    m["trace"].append({"tool": name, "args": args, "result": out[:300]})
-    if media:
-        m.setdefault("media", []).extend(media)
-    m["content"] = m["content"] or ("Done." if media else out)
-    save_chat(chat)
+    with CHAT_LOCK:
+        try:
+            chat = load_chat(cid)
+        except HTTPException as e:
+            if e.status_code == 404:  # the chat was deleted meanwhile; generated files remain in the gallery
+                return
+            raise
+        m = next((m for m in chat["messages"] if (m.get("pending") or {}).get("job") == jid), None)
+        if not m:
+            return
+        m.pop("pending")
+        m["trace"].append({"tool": name, "args": args, "result": out[:300]})
+        if media:
+            m.setdefault("media", []).extend(media)
+        m["content"] = m["content"] or ("Done." if media else out)
+        save_chat(chat)
 
 
-async def run(chat: dict, think: bool | None = None):
+async def run(chat: dict, think: bool | None = None, gpu_owner: str = ""):
     """One user turn: stream tokens, run tools, persist the chat. Events are SSE `data:` JSON lines."""
-    yield sse({"type": "chat", "id": chat["id"], "title": chat["title"]})
-    history = history_for_model(chat["messages"][-MAX_HISTORY:])
-    while history and history[0]["role"] != "user":  # some chat templates reject a leading assistant turn
-        history.pop(0)
-    msgs = [{"role": "system", "content": system_prompt()}] + history
     text, thought, trace, media, finished = "", "", [], [], False
     job = None  # (id, tool, args, task) of a generation job that is running right now
     tainted = False
-    urls = urls_in(" ".join(m["content"] for m in chat["messages"] if m["role"] == "user"))  # web_fetch may open these, and what results list
     try:
+        yield sse({"type": "chat", "id": chat["id"], "title": chat["title"]})
+        history = history_for_model(chat["messages"][-MAX_HISTORY:])
+        while history and history[0]["role"] != "user":  # some chat templates reject a leading assistant turn
+            history.pop(0)
+        msgs = [{"role": "system", "content": system_prompt()}] + history
+        urls = urls_in(" ".join(m["content"] for m in chat["messages"] if m["role"] == "user"))  # web_fetch may open these, and what results list
         for _ in range(MAX_STEPS):
             fit_context(msgs)
             msg, sep, tsep, cut = None, "\n\n" if text else "", "\n\n" if thought else "", False
@@ -922,6 +1053,8 @@ async def run(chat: dict, think: bool | None = None):
     except Exception as e:  # llama-server down, malformed stream, ...
         yield sse({"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:  # also runs when the client disconnects (Stop button, closed tab)
+        if chat["messages"] and chat["messages"][-1].get("role") == "user":
+            chat["messages"][-1].pop("in_progress", None)
         if finished:
             reply = text or "(empty reply)"
         elif job:  # the client left while a job was running: keep the turn; finish_job() completes it
@@ -929,17 +1062,25 @@ async def run(chat: dict, think: bool | None = None):
         elif text or media:  # media is already shown to the user and saved on disk: keep it in the chat
             reply = (text + "\n" if text else "") + "[interrupted]"
         else:
-            reply = None
-        if reply is None:
-            chat["messages"].pop()  # drop the unanswered user turn so roles keep alternating
-        else:
-            chat["messages"].append({"role": "assistant", "content": reply, "trace": trace,
-                                     **({"thinking": thought} if thought else {}),
-                                     **({"media": media} if media else {}),
-                                     **({"pending": {"job": job[0], "boot": BOOT, "tool": job[1]}} if job else {})})
-        save_chat(chat)
-        if job:
-            job[3].add_done_callback(lambda t, cid=chat["id"], j=job: finish_job(cid, j, t))
+            reply = "[interrupted before a response was received]"
+        chat["messages"].append({"role": "assistant", "content": reply, "trace": trace,
+                                 **({"thinking": thought} if thought else {}),
+                                 **({"media": media} if media else {}),
+                                 **({"pending": {"job": job[0], "boot": BOOT, "tool": job[1]}} if job else {})})
+        try:
+            save_chat(chat)
+        finally:
+            with CHAT_LOCK:
+                ACTIVE_CHATS.discard(chat["id"])
+            if job:
+                def complete_job(task):
+                    try:
+                        finish_job(chat["id"], job, task)
+                    finally:
+                        release_gpu(gpu_owner)
+                job[3].add_done_callback(complete_job)
+            else:
+                release_gpu(gpu_owner)
     yield sse({"type": "done"})
 
 
@@ -960,32 +1101,56 @@ class Ask(BaseModel):
 @app.get("/api/health")
 def health():
     try:
-        return {"ready": httpx.get(f"{LLAMA_URL}/health", timeout=3).status_code == 200}
+        ready = httpx.get(f"{LLAMA_URL}/health", timeout=3).status_code == 200
     except httpx.HTTPError:
-        return {"ready": False}
+        ready = False
+    return JSONResponse({"ready": ready}, status_code=200 if ready else 503)
 
 
 @app.get("/api/chats")
-def list_chats():
-    files = sorted(CHATS.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:50] if CHATS.is_dir() else []
+def list_chats(offset: int | None = Query(None, ge=0), limit: int | None = Query(None, ge=1, le=100)):
+    paginated = offset is not None or limit is not None
+    offset, limit = offset or 0, limit or 50
+    files = sorted(CHATS.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True) if CHATS.is_dir() else []
+    page = files[offset:offset + limit]
     out = []
-    for f in files:
+    for f in page:
         try:
             c = json.loads(f.read_text(encoding="utf-8"))
+            valid = valid_chat(c, f.stem)
         except (OSError, ValueError):
-            continue
-        out.append({"id": f.stem, "title": c.get("title") or "(untitled)", "updated": c.get("updated", "")})
-    return out
+            valid = False
+            c = {}
+        if not valid:
+            out.append({"id": f.stem, "title": "Unreadable chat file", "updated": "", "corrupt": True})
+        else:
+            out.append({"id": f.stem, "title": c.get("title") or "(untitled)", "updated": c.get("updated", "")})
+    return ({"chats": out, "next_offset": offset + len(page) if offset + len(page) < len(files) else None}
+            if paginated else out)
 
 
 @app.get("/api/chats/{cid}")
 def get_chat(cid: str):
-    return load_chat(cid)
+    chat = load_chat(cid)
+    chat["model_history_limit"] = MAX_HISTORY
+    return chat
+
+
+@app.get("/api/chats/{cid}/raw")
+def download_chat_file(cid: str):
+    p = chat_path(cid)
+    if not p.is_file():
+        raise HTTPException(404, "no such chat")
+    return FileResponse(p, media_type="application/json", filename=f"{cid}.json")
 
 
 @app.delete("/api/chats/{cid}")
 def delete_chat(cid: str):
-    chat_path(cid).unlink(missing_ok=True)
+    p = chat_path(cid)
+    with CHAT_LOCK:
+        if cid in ACTIVE_CHATS:
+            raise HTTPException(409, "a message is generating in this chat; wait before deleting it")
+        p.unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -1025,17 +1190,30 @@ def video_start(body: VideoAsk):
         job_body = videogen.build_body(engine, body.values, VIDEO_CAPS)
     except videogen.BadValue as e:
         raise HTTPException(400, str(e)) from None
-    with VIDEO_LOCK:
-        if JOBS or any(j["state"] == "running" for j in VIDEO_JOBS.values()):  # one GPU
-            raise HTTPException(409, "an image or video is already being generated; wait for it to finish")
-        job = {"id": secrets.token_hex(4), "state": "running", "phase": "starting", "step": 0, "steps": 0, "percent": 0, "queue": 0,
-               "seed": job_body["seed"], "prompt": job_body["prompt"], "started": time.time()}
-        VIDEO_JOBS[job["id"]] = job
-        for old in list(VIDEO_JOBS)[:-VIDEO_KEEP]:
-            del VIDEO_JOBS[old]
-        view = video_view(job)
-    threading.Thread(target=run_video_job, args=(job, engine, job_body), daemon=True).start()
-    return view
+    if JOBS or video_busy():  # retain protection for existing jobs not represented by the reservation
+        raise HTTPException(409, "an image or video is already being generated; wait for it to finish")
+    owner = "video:" + secrets.token_hex(8)
+    if not reserve_gpu(owner):
+        raise HTTPException(409, "GPU work is already in progress; wait for it to finish")
+    job = None
+    try:
+        with VIDEO_LOCK:
+            if JOBS or any(j["state"] == "running" for j in VIDEO_JOBS.values()):
+                raise HTTPException(409, "an image or video is already being generated; wait for it to finish")
+            job = {"id": secrets.token_hex(4), "state": "running", "phase": "starting", "step": 0, "steps": 0, "percent": 0, "queue": 0,
+                   "seed": job_body["seed"], "prompt": job_body["prompt"], "started": time.time(), "gpu_owner": owner}
+            VIDEO_JOBS[job["id"]] = job
+            for old in list(VIDEO_JOBS)[:-VIDEO_KEEP]:
+                del VIDEO_JOBS[old]
+            view = video_view(job)
+        threading.Thread(target=run_video_job, args=(job, engine, job_body), daemon=True).start()
+        return view
+    except Exception:
+        with VIDEO_LOCK:
+            if job is not None and job["id"] in VIDEO_JOBS:
+                VIDEO_JOBS[job["id"]].update(state="error", phase="error", error="video worker could not be started")
+        release_gpu(owner)
+        raise
 
 
 @app.get("/api/video/jobs")
@@ -1075,25 +1253,111 @@ def get_media(name: str):
     return FileResponse(p)
 
 
+def chat_media_references() -> tuple[set[str], bool, bool]:
+    refs, unreadable, busy = set(), False, bool(ACTIVE_CHATS or JOBS) or video_busy()
+    if not CHATS.is_dir():
+        return refs, unreadable, busy
+    for p in CHATS.glob("*.json"):
+        try:
+            chat = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            unreadable = True
+            continue
+        if not valid_chat(chat, p.stem):
+            unreadable = True
+        if not isinstance(chat, dict) or not isinstance(chat.get("messages"), list):
+            continue
+        for message in chat["messages"]:
+            if not isinstance(message, dict):
+                unreadable = True
+                continue
+            busy = busy or any(isinstance(message.get(key), dict) and message[key].get("boot") == BOOT
+                               for key in ("pending", "in_progress"))
+            media_items = message.get("media")
+            if not isinstance(media_items, list):
+                if media_items:
+                    unreadable = True
+                continue
+            for media in media_items:
+                if isinstance(media, dict):
+                    name = str(media.get("url", "")).rsplit("/", 1)[-1]
+                    if MEDIA_RE.fullmatch(name):
+                        refs.add(name)
+    return refs, unreadable, busy
+
+
+@app.get("/api/media")
+def list_media(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
+    with CHAT_LOCK:
+        files = sorted((p for p in GENERATED.iterdir() if p.is_file() and MEDIA_RE.fullmatch(p.name)),
+                       key=lambda p: p.stat().st_mtime, reverse=True) if GENERATED.is_dir() else []
+        refs, unreadable, busy = chat_media_references()
+        page = files[offset:offset + limit]
+        media = [{"name": p.name, "url": f"/api/media/{p.name}", "size": p.stat().st_size,
+                  "kind": p.suffix[1:], "referenced": p.name in refs,
+                  "deletable": not unreadable and not busy and p.name not in refs} for p in page]
+        next_offset = offset + len(page) if offset + len(page) < len(files) else None
+    return {"media": media, "next_offset": next_offset}
+
+
+@app.delete("/api/media/{name}")
+def delete_media(name: str):
+    if not MEDIA_RE.fullmatch(name):
+        raise HTTPException(404, "no such file")
+    p = GENERATED / name
+    with CHAT_LOCK:
+        if not p.is_file():
+            raise HTTPException(404, "no such file")
+        refs, unreadable, busy = chat_media_references()
+        if unreadable:
+            raise HTTPException(409, "media references cannot be verified while a saved chat is unreadable")
+        if busy:
+            raise HTTPException(409, "media cannot be removed while generation is running; wait for jobs to finish")
+        if name in refs:
+            raise HTTPException(409, "this file is still referenced by a saved chat; delete that chat before removing the file")
+        p.unlink()
+    return {"ok": True}
+
+
 @app.post("/api/chat")
 def chat_turn(body: Ask):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "empty message")
-    if JOBS or video_busy():  # one GPU: the chat model loading next to a running image/video job can run either out of VRAM
+    max_message_chars = max(1, PROMPT_BUDGET - MEMORY_MAX_CHARS - len(BASE_PROMPT) - len(WEB_PROMPT) - TOOLS_CHARS)
+    if len(text) > max_message_chars:
+        raise HTTPException(413, f"message is too long to fit the model context (maximum {max_message_chars:,} characters)")
+    if JOBS or video_busy():
         raise HTTPException(409, "an image or video is being generated and the GPU is busy; wait for it to finish")
-    chat = new_chat()
     if body.chat_id:
-        if chat_path(body.chat_id).is_file():
-            chat = load_chat(body.chat_id)
-        else:  # id of a chat that was never saved (e.g. its first turn failed): start it under that id
-            chat["id"] = body.chat_id
-    if any(m.get("pending") for m in chat["messages"]):  # saving this turn would overwrite the result the job is about to attach
-        raise HTTPException(409, "a generation is still running in this chat; wait for it to finish")
-    chat["title"] = chat["title"] or " ".join(text.split())[:60]
-    chat["messages"].append({"role": "user", "content": text})
-    return StreamingResponse(run(chat, body.think), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        chat_path(body.chat_id)  # validate the id before entering the critical section
+    with CHAT_LOCK:
+        if body.chat_id and body.chat_id in ACTIVE_CHATS:
+            raise HTTPException(409, "a message is already generating in this chat; wait for it to finish")
+        if body.chat_id and chat_path(body.chat_id).is_file():
+            chat = load_chat(body.chat_id)  # read the latest snapshot while holding the same lock as turn mutations
+        else:
+            chat = new_chat()
+            if body.chat_id:
+                chat["id"] = body.chat_id
+        if any(m.get("pending") or m.get("in_progress") for m in chat["messages"]):  # avoid overwriting an active turn or pending job
+            raise HTTPException(409, "a generation is still running in this chat; wait for it to finish")
+        gpu_owner = "chat:" + secrets.token_hex(8)
+        if not reserve_gpu(gpu_owner):
+            raise HTTPException(409, "GPU work is already in progress; wait for it to finish")
+        ACTIVE_CHATS.add(chat["id"])
+    try:
+        chat["title"] = chat["title"] or " ".join(text.split())[:60]
+        chat["messages"].append({"role": "user", "content": text, "in_progress": {"boot": BOOT}})
+        save_chat(chat)  # make the accepted user turn durable before starting inference
+        return StreamingResponse(run(chat, body.think, gpu_owner), media_type="text/event-stream",
+                                 background=BackgroundTask(release_unstarted_chat, chat["id"], gpu_owner),
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    except Exception:
+        with CHAT_LOCK:
+            ACTIVE_CHATS.discard(chat["id"])
+        release_gpu(gpu_owner)
+        raise
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")

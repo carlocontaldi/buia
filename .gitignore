@@ -1,5 +1,7 @@
 # local config and secrets
 .env
+.github/
+.vs/
 
 # python caches
 __pycache__/
