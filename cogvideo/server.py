@@ -39,7 +39,8 @@ def run_job(jid: str, body: dict) -> None:
         proc = subprocess.Popen([sys.executable, str(HERE / "generate.py"), str(job_file)])
         with LOCK:
             PROCS[jid] = proc
-            cancelled = JOBS[jid].get("cancelling")
+            job = JOBS.get(jid)
+            cancelled = job is None or job.get("cancelling")
         if cancelled:  # the cancel came before the process existed
             proc.terminate()
         rc = proc.wait()
@@ -47,13 +48,16 @@ def run_job(jid: str, body: dict) -> None:
         if rc == 0 and out.exists():  # finished before a cancel could stop it: the video is kept
             result = {"output_format": "webm", "frame_count": FRAMES, "fps": FPS, "result_url": f"/sdcpp/v1/jobs/{jid}/result"}
             with LOCK:
-                JOB_FILES[jid] = out  # the file first: a poll that sees "completed" must find it
-                JOBS[jid] = {"status": "completed", "result": result}
+                if jid in JOBS:
+                    JOB_FILES[jid] = out  # the file first: a poll that sees "completed" must find it
+                    JOBS[jid] = {"status": "completed", "result": result}
         else:
             msg = err.read_text(encoding="utf-8") if err.exists() else f"the generation process ended with code {rc}" + \
                   (" (killed: probably out of memory, see README)" if rc in (-9, 137) else "")
             with LOCK:
-                JOBS[jid] = {"status": "cancelled", "error": "job cancelled by client"} if JOBS[jid].get("cancelling") else {"status": "failed", "error": msg}
+                job = JOBS.get(jid)
+                if job is not None:
+                    JOBS[jid] = {"status": "cancelled", "error": "job cancelled by client"} if job.get("cancelling") else {"status": "failed", "error": msg}
     finally:
         with LOCK:
             PROCS.pop(jid, None)

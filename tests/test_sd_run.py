@@ -100,6 +100,19 @@ class SdRunTests(unittest.TestCase):
             self.wait_starts(4)
             self.assertEqual([line.split()[-2:] for line in self.started()[2:]], [["--steps", "9"]] * 2)
 
+    def test_active_flags_change_within_one_second_restarts_the_server(self):
+        now = time.time_ns()
+        second = now // 1_000_000_000 * 1_000_000_000
+        self.active.write_text("--steps 8\n", encoding="utf-8")
+        os.utime(self.active, ns=(second + 100_000_000, second + 100_000_000))
+        with patch.object(sdmodels, "SD_DIR", self.tmp):
+            self.run_script()
+            self.wait_starts(1)
+            sdmodels.put(self.active, "--steps 9")
+            os.utime(self.active, ns=(second + 800_000_000, second + 800_000_000))
+            self.wait_starts(2)
+        self.assertEqual([line.split()[-2:] for line in self.started()], [["--steps", "8"], ["--steps", "9"]])
+
 
 if __name__ == "__main__":
     unittest.main()

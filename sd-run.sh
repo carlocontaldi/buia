@@ -16,7 +16,7 @@ pid=
 n=0
 waiting=
 
-stamp() { stat -c %Y "$active" 2>/dev/null; }   # modification time; empty when the file does not exist
+stamp() { stat -c %y "$active" 2>/dev/null; }   # nanosecond modification time; empty when the file does not exist
 stop() { [ -n "$pid" ] && kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; [ -n "$fifo" ] && rm -f "$fifo"; fifo=; }
 trap 'stop; exit 143' TERM INT
 

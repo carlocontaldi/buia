@@ -4,6 +4,7 @@ fake sd-server (progress only in its log file, as the real one) or a fake cogvid
 Like test_sd_job.py they need fastapi and httpx (skipped without them). From the repo root:  python -m unittest discover -s tests
 """
 import atexit
+import asyncio
 import base64
 import json
 import os
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -117,6 +119,9 @@ class VideoApiTests(unittest.TestCase):
         Fake.script, Fake.logs, Fake.log_path, Fake.polls, Fake.posted, Fake.fail_polls = [DONE], [], self.logdir / "active-video.log", 0, [], 0
         Fake.cancels, Fake.cancel_code, Fake.dropped, Fake.dropped_polls = [], 200, False, 0
         agent.VIDEO_JOBS.clear()
+        agent.ACTIVE_CHATS.clear()
+        with agent.GPU_LOCK:
+            agent.GPU_OWNER = None
         shutil.rmtree(agent.GENERATED, ignore_errors=True)
         self.sleeps = patch.object(agent.time, "sleep", self.record)
         self.sleeps.start()
@@ -125,6 +130,9 @@ class VideoApiTests(unittest.TestCase):
     def tearDown(self):
         agent.SD_VIDEO_URL, agent.sdmodels.COG_URL, agent.models.unload_all, agent.SD_LOG_DIR = self.saved
         agent.VIDEO_JOBS.clear()
+        agent.ACTIVE_CHATS.clear()
+        with agent.GPU_LOCK:
+            agent.GPU_OWNER = None
 
     def record(self, seconds):
         with agent.VIDEO_LOCK:
@@ -165,7 +173,315 @@ class VideoApiTests(unittest.TestCase):
             for method, path in (("get", "/api/video/params"), ("get", "/api/video/jobs"), ("post", "/api/video/jobs")):
                 self.assertEqual(getattr(anon, method)(path).status_code, 401, path)
 
+    def test_chat_turn_is_saved_before_streaming_and_same_chat_is_exclusive(self):
+        async def fake_llm_stream(msgs, think=None):
+            yield "delta", "first reply"
+            yield "message", {"role": "assistant", "content": "first reply"}
+
+        async def consume(iterator):
+            async for _ in iterator:
+                pass
+
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)), \
+                patch.object(agent, "llm_stream", fake_llm_stream):
+            response = agent.chat_turn(agent.Ask(message="first message"))
+            path = next(Path(chats).glob("*.json"))
+            chat = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(chat["messages"], [{"role": "user", "content": "first message", "in_progress": {"boot": agent.BOOT}}])
+
+            with self.assertRaises(agent.HTTPException) as e:
+                agent.chat_turn(agent.Ask(message="second message", chat_id=chat["id"]))
+            self.assertEqual(e.exception.status_code, 409)
+
+            asyncio.run(consume(response.body_iterator))
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual([m["role"] for m in saved["messages"]], ["user", "assistant"])
+            self.assertNotIn("in_progress", saved["messages"][0])
+            self.assertEqual(saved["messages"][1]["content"], "first reply")
+            self.assertNotIn(chat["id"], agent.ACTIVE_CHATS)
+
+    def test_chat_load_occurs_after_serialization_lock_is_acquired(self):
+        async def fake_llm_stream(msgs, think=None):
+            yield "message", {"role": "assistant", "content": "reply"}
+
+        async def consume(iterator):
+            async for _ in iterator:
+                pass
+
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)), \
+                patch.object(agent, "llm_stream", fake_llm_stream):
+            original = agent.new_chat()
+            original["messages"].append({"role": "user", "content": "earlier"})
+            original["messages"].append({"role": "assistant", "content": "saved reply"})
+            agent.save_chat(original)
+            entered = threading.Event()
+            actual_load = agent.load_chat
+
+            def observed_load(cid):
+                entered.set()
+                return actual_load(cid)
+
+            result = []
+            with patch.object(agent, "load_chat", observed_load):
+                with agent.CHAT_LOCK:
+                    worker = threading.Thread(target=lambda: result.append(agent.chat_turn(agent.Ask(message="next", chat_id=original["id"]))))
+                    worker.start()
+                    self.assertFalse(entered.wait(0.1), "the chat snapshot was loaded before the turn lock")
+                worker.join(5)
+                self.assertFalse(worker.is_alive())
+                self.assertTrue(entered.is_set())
+            response = result[0]
+            asyncio.run(consume(response.body_iterator))
+            saved = json.loads((Path(chats) / f"{original['id']}.json").read_text(encoding="utf-8"))
+            self.assertEqual([m["content"] for m in saved["messages"] if m["role"] == "user"], ["earlier", "next"])
+
+    def test_unstarted_chat_stream_releases_its_reservation_after_response_cleanup(self):
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)):
+            response = agent.chat_turn(agent.Ask(message="response never started"))
+            cid = next(Path(chats).glob("*.json")).stem
+            owner = agent.GPU_OWNER
+            self.assertIn(cid, agent.ACTIVE_CHATS)
+            asyncio.run(response.background())
+            self.assertNotIn(cid, agent.ACTIVE_CHATS)
+            self.assertIsNone(agent.GPU_OWNER)
+            self.assertTrue(owner.startswith("chat:"))
+            saved = json.loads(next(Path(chats).glob("*.json")).read_text(encoding="utf-8"))
+            self.assertNotIn("in_progress", saved["messages"][-2])
+            self.assertIn("interrupted", saved["messages"][-1]["content"])
+
+    def test_completed_chat_does_not_release_gpu_transferred_to_generation_job(self):
+        cid = "20261119-120000-0001"
+        owner = "chat:test-owner"
+        with agent.CHAT_LOCK:
+            agent.ACTIVE_CHATS.discard(cid)
+        with agent.GPU_LOCK:
+            agent.GPU_OWNER = owner
+        agent.release_unstarted_chat(cid, owner)
+        self.assertEqual(agent.GPU_OWNER, owner)
+        agent.release_gpu(owner)
+
+    def test_unfinished_saved_user_turn_is_recovered_after_restart(self):
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)):
+            agent.chat_turn(agent.Ask(message="durable prompt"))
+            path = next(Path(chats).glob("*.json"))
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            cid = saved["id"]
+            self.assertEqual(saved["messages"][-1]["content"], "durable prompt")
+            self.assertEqual(saved["messages"][-1]["in_progress"]["boot"], agent.BOOT)
+
+            with agent.CHAT_LOCK:
+                agent.ACTIVE_CHATS.clear()  # simulate the in-memory state being lost on process restart
+            with patch.object(agent, "BOOT", agent.BOOT + "-next"):
+                recovered = agent.load_chat(cid)
+            self.assertEqual([m["role"] for m in recovered["messages"]], ["user", "assistant"])
+            self.assertIn("restarted", recovered["messages"][-1]["content"])
+            self.assertNotIn("in_progress", recovered["messages"][0])
+
+    def test_chat_cannot_be_deleted_while_its_turn_is_running(self):
+        async def fake_llm_stream(msgs, think=None):
+            yield "delta", "reply"
+            yield "message", {"role": "assistant", "content": "reply"}
+
+        async def consume(iterator):
+            async for _ in iterator:
+                pass
+
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)), \
+                patch.object(agent, "llm_stream", fake_llm_stream):
+            response = agent.chat_turn(agent.Ask(message="keep this chat"))
+            path = next(Path(chats).glob("*.json"))
+            cid = json.loads(path.read_text(encoding="utf-8"))["id"]
+            rejected = self.client.delete(f"/api/chats/{cid}")
+            self.assertEqual(rejected.status_code, 409)
+            self.assertTrue(path.exists())
+
+            asyncio.run(consume(response.body_iterator))
+            deleted = self.client.delete(f"/api/chats/{cid}")
+            self.assertEqual(deleted.status_code, 200)
+            self.assertFalse(path.exists())
+
+    def test_video_job_cannot_start_during_an_active_chat_turn(self):
+        async def fake_llm_stream(msgs, think=None):
+            yield "delta", "reply"
+            yield "message", {"role": "assistant", "content": "reply"}
+
+        async def consume(iterator):
+            async for _ in iterator:
+                pass
+
+        with patch.object(agent, "llm_stream", fake_llm_stream):
+            response = agent.chat_turn(agent.Ask(message="keep GPU for chat"))
+            self.assertTrue(agent.GPU_OWNER.startswith("chat:"))
+            with self.assertRaises(agent.HTTPException) as e:
+                agent.video_start(agent.VideoAsk(values={"prompt": "a quiet forest"}))
+            self.assertEqual(e.exception.status_code, 409)
+            asyncio.run(consume(response.body_iterator))
+            self.assertIsNone(agent.GPU_OWNER)
+
+    def test_chat_listing_pages_and_exposes_corrupt_chats_for_download(self):
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)):
+            ids = ["20261119-120000-0001", "20261119-120001-0002", "20261119-120002-0003"]
+            for i, cid in enumerate(ids):
+                chat = {"id": cid, "title": f"Chat {i}", "updated": "now", "messages": [{"role": "user", "content": "hello"}]}
+                (Path(chats) / f"{cid}.json").write_text(json.dumps(chat) if i != 1 else "{broken", encoding="utf-8")
+                os.utime(Path(chats) / f"{cid}.json", (i + 1, i + 1))
+
+            first = self.client.get("/api/chats?limit=2").json()
+            self.assertEqual(first["next_offset"], 2)
+            self.assertEqual([x["id"] for x in first["chats"]], [ids[2], ids[1]])
+            corrupt = first["chats"][1]
+            self.assertTrue(corrupt["corrupt"])
+            self.assertEqual(self.client.get(f"/api/chats/{ids[1]}").status_code, 422)
+            backup = self.client.get(f"/api/chats/{ids[1]}/raw")
+            self.assertEqual((backup.status_code, backup.text), (200, "{broken"))
+            second = self.client.get("/api/chats?offset=2&limit=2").json()
+            self.assertIsNone(second["next_offset"])
+            self.assertEqual(second["chats"][0]["id"], ids[0])
+
+            legacy = self.client.get("/api/chats")
+            self.assertIsInstance(legacy.json(), list)
+
+            invalid_shape = {"id": ids[0], "messages": [{"role": "system", "content": "not a chat role"}]}
+            (Path(chats) / f"{ids[0]}.json").write_text(json.dumps(invalid_shape), encoding="utf-8")
+            self.assertEqual(self.client.get(f"/api/chats/{ids[0]}").status_code, 422)
+            listing = self.client.get("/api/chats?limit=3").json()["chats"]
+            self.assertTrue(next(x for x in listing if x["id"] == ids[0])["corrupt"])
+
+    def test_media_routes_do_not_crash_on_malformed_media_fields(self):
+        with tempfile.TemporaryDirectory() as chats, tempfile.TemporaryDirectory() as generated, \
+                patch.object(agent, "CHATS", Path(chats)), patch.object(agent, "GENERATED", Path(generated)):
+            name = "20261119-120000-a-test-0123456789abcdef.webm"
+            (Path(generated) / name).write_bytes(VIDEO)
+            chat = agent.new_chat()
+            chat["messages"].append({"role": "assistant", "content": "broken data", "media": 1})
+            agent.save_chat(chat)
+
+            listing = self.client.get("/api/media")
+            self.assertEqual(listing.status_code, 200)
+            self.assertFalse(listing.json()["media"][0]["deletable"])
+            rejected = self.client.delete(f"/api/media/{name}")
+            self.assertEqual(rejected.status_code, 409)
+            self.assertTrue((Path(generated) / name).exists())
+
+    def test_media_gallery_prevents_deleting_files_used_by_chats(self):
+        name = "20261119-120000-a-test-0123456789abcdef.webm"
+        with tempfile.TemporaryDirectory() as chats, tempfile.TemporaryDirectory() as generated, \
+                patch.object(agent, "CHATS", Path(chats)), patch.object(agent, "GENERATED", Path(generated)):
+            (Path(generated) / name).write_bytes(VIDEO)
+            chat = agent.new_chat()
+            chat["messages"].append({"role": "assistant", "content": "video", "media": [{"url": f"/api/media/{name}"}]})
+            agent.save_chat(chat)
+
+            page = self.client.get("/api/media").json()
+            self.assertEqual(page["media"][0]["name"], name)
+            self.assertTrue(page["media"][0]["referenced"])
+            self.assertFalse(page["media"][0]["deletable"])
+            self.assertEqual(self.client.delete(f"/api/media/{name}").status_code, 409)
+
+            self.client.delete(f"/api/chats/{chat['id']}")
+            self.assertEqual(self.client.delete(f"/api/media/{name}").status_code, 200)
+            self.assertFalse((Path(generated) / name).exists())
+
+            pending_name = "20261119-120001-another-0123456789abcdef.webm"
+            (Path(generated) / pending_name).write_bytes(VIDEO)
+            pending = agent.new_chat()
+            pending["messages"].extend([
+                {"role": "user", "content": "make a video"},
+                {"role": "assistant", "content": "", "trace": [], "pending": {"job": "job1", "boot": agent.BOOT, "tool": "generate_video"}},
+            ])
+            agent.save_chat(pending)
+            self.assertEqual(self.client.delete(f"/api/media/{pending_name}").status_code, 409)
+
+    def test_health_reports_not_ready_as_unhealthy(self):
+        with patch.object(agent.httpx, "get", side_effect=httpx.ConnectError("offline")):
+            response = self.client.get("/api/health")
+        self.assertEqual((response.status_code, response.json()), (503, {"ready": False}))
+
+    def test_health_reports_ready_as_healthy(self):
+        with patch.object(agent.httpx, "get", return_value=httpx.Response(200)):
+            response = self.client.get("/api/health")
+        self.assertEqual((response.status_code, response.json()), (200, {"ready": True}))
+
+    def test_chat_rejects_a_prompt_that_cannot_fit_context(self):
+        oversized = "x" * (agent.PROMPT_BUDGET + 1)
+        response = self.client.post("/api/chat", json={"message": oversized})
+        self.assertEqual(response.status_code, 413)
+
+    def test_file_tools_page_list_and_search_txt_and_overwrite_atomically(self):
+        with tempfile.TemporaryDirectory() as data:
+            data_path = Path(data)
+            workspace, vault = data_path / "workspace", data_path / "vault"
+            workspace.mkdir(); vault.mkdir()
+            for i in range(5):
+                (workspace / f"note-{i}.txt").write_text(f"needle {i}", encoding="utf-8")
+            with patch.object(agent, "DATA", data_path), patch.object(agent, "ROOTS", [workspace, vault]):
+                self.assertIn("offset=2", agent.list_dir("workspace", limit=2))
+                results = agent.search_files("needle", "workspace", limit=2)
+                self.assertIn("note-0.txt", results)
+                self.assertIn("offset=2", results)
+                target = workspace / "note-0.txt"
+                with patch.object(agent.os, "replace", side_effect=OSError("replace failed")):
+                    with self.assertRaisesRegex(OSError, "replace failed"):
+                        agent.write_file("workspace/note-0.txt", "replacement", overwrite=True)
+                self.assertEqual(target.read_text(encoding="utf-8"), "needle 0")
+                self.assertEqual(list(workspace.glob("*.tmp")), [])
+
+    def post_chat_with_sse(self, body):
+        real_async_client = httpx.AsyncClient
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+
+        def fake_async_client(**kwargs):
+            return real_async_client(transport=transport, **kwargs)
+
+        async def resolve_model():
+            return "test-model"
+
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)), \
+                patch.object(agent.models, "resolve_model", resolve_model), \
+                patch.object(agent.httpx, "AsyncClient", fake_async_client):
+            response = self.client.post("/api/chat", json={"message": "stream test"})
+            events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+            cid = next(event["id"] for event in events if event["type"] == "chat")
+            return response, events, agent.load_chat(cid)
+
+    def test_eof_without_completion_signal_saves_partial_reply_as_interrupted(self):
+        chunk = {"choices": [{"delta": {"content": "partial answer"}, "finish_reason": None}]}
+        response, events, chat = self.post_chat_with_sse(f"data: {json.dumps(chunk)}\n\n".encode())
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(event["type"] == "error" and "completion signal" in event["message"] for event in events))
+        self.assertTrue(chat["messages"][-1]["content"].endswith("[interrupted]"))
+
+    def test_finish_reason_without_done_marker_is_a_complete_response(self):
+        chunks = [
+            {"choices": [{"delta": {"content": "complete answer"}, "finish_reason": None}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ]
+        body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks).encode()
+        response, events, chat = self.post_chat_with_sse(body)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(any(event["type"] == "error" for event in events))
+        self.assertEqual(chat["messages"][-1]["content"], "complete answer")
+
     # ---- sd-server: the steps are read from its log
+    def test_same_prompt_generated_twice_in_one_second_never_overwrites(self):
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 19, 12, 0, 0, tzinfo=tz)
+
+        body = {"prompt": "a quiet forest", "width": 256, "height": 256, "video_frames": 17, "fps": 16,
+                "seed": 42, "sample_params": {"sample_steps": 10}, "output_format": "webm"}
+        with patch.object(agent, "datetime", FixedDateTime):
+            Fake.polls = 0
+            first_text, first_media = agent._sd_job("vid_gen", body)
+            Fake.polls = 0
+            second_text, second_media = agent._sd_job("vid_gen", body)
+        self.assertIn("saved ", first_text)
+        self.assertIn("saved ", second_text)
+        self.assertNotEqual(first_media[0]["url"], second_media[0]["url"])
+        self.assertEqual(self.client.get(first_media[0]["url"]).content, VIDEO)
+        self.assertEqual(self.client.get(second_media[0]["url"]).content, VIDEO)
+
     def test_sd_job_follows_the_log_and_ends_with_the_video(self):
         run = {"status": "running"}
         Fake.script = [{"status": "queued", "queue_position": 2}, run, run, run, run, run, run, run, DONE]

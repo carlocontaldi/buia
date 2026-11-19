@@ -90,12 +90,17 @@ Check "docker compose up"
 # 7. Wait until llama-server answers (up to 2 minutes)
 Write-Host "Waiting for BUIA..."
 $ready = $false
-for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
-    try { $ready = [bool](Invoke-RestMethod http://127.0.0.1:8000/api/health -TimeoutSec 3).ready } catch { }
-    if (-not $ready) { Start-Sleep -Seconds 2 }
+$wait = [Diagnostics.Stopwatch]::StartNew()
+while ($wait.Elapsed.TotalSeconds -lt 120 -and -not $ready) {
+    $remaining = [math]::Max(1, [math]::Ceiling(120 - $wait.Elapsed.TotalSeconds))
+    try { $ready = [bool](Invoke-RestMethod http://127.0.0.1:8000/api/health -TimeoutSec ([math]::Min(3, $remaining))).ready } catch { }
+    if (-not $ready -and $wait.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Seconds ([math]::Min(2, [math]::Max(1, [math]::Floor(120 - $wait.Elapsed.TotalSeconds)))) }
 }
 if (-not $ready) {
-    Write-Warning "Not ready yet. Look at: docker compose logs llama --tail 50"
+    Write-Warning "BUIA did not become ready. Current services and recent logs:"
+    docker compose @compose ps
+    docker compose @compose logs --tail 50 llama agent
+    throw "BUIA did not become ready within 120 seconds. Fix the service startup issue and rerun .\install.cmd."
 }
 
 # 8. Optional: phone access over Tailscale

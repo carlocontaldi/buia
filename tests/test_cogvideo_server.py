@@ -179,6 +179,7 @@ class ApiTests(unittest.TestCase):
                 (self.tmp / f"{jid}.webm.progress").write_text(text, encoding="utf-8")
                 self.assertEqual(json.loads(self.request("GET", f"/sdcpp/v1/jobs/{jid}")[2]), {"status": "running"})
             gate.set()
+            self.wait_for(jid, "completed")
 
     def test_the_job_gets_the_negative_prompt_and_guidance(self):
         fake = FakeGenerate()
@@ -201,6 +202,7 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.request("GET", f"/sdcpp/v1/jobs/{jid}/result")[0], 404)  # still running
             self.assertEqual(self.request("POST", "/sdcpp/v1/vid_gen", {"prompt": "y"})[0], 409)
             gate.set()
+            self.wait_for(jid, "completed")
         self.assertEqual(self.request("GET", "/sdcpp/v1/jobs/nope/result")[0], 404)
         self.assertEqual(self.request("GET", f"/sdcpp/v1/jobs/{jid}/other")[0], 404)
 
@@ -268,6 +270,30 @@ class ApiTests(unittest.TestCase):
             release.set()
             self.wait_for(jid, "cancelled")
             self.assertTrue(fake.terminated.is_set())
+
+    def test_worker_stops_cleanly_if_its_job_record_is_removed_before_process_start(self):
+        fake = FakeGenerate(gate=threading.Event())
+        entered, release = threading.Event(), threading.Event()
+
+        def delayed_popen(cmd, *args, **kwargs):
+            proc = fake(cmd)
+            entered.set()
+            release.wait(5)
+            return proc
+
+        with patch.object(server.subprocess, "Popen", delayed_popen):
+            jid = self.post_video()
+            self.assertTrue(entered.wait(5))
+            with server.LOCK:
+                server.JOBS.pop(jid)
+            release.set()
+            self.assertTrue(fake.terminated.wait(5))
+            for _ in range(100):
+                if not server.PROCS and not list(self.tmp.iterdir()):
+                    break
+                time.sleep(0.02)
+        self.assertEqual(server.PROCS, {})
+        self.assertEqual(list(self.tmp.iterdir()), [])
 
     def test_cancel_of_an_unknown_job_is_a_404(self):
         self.assertEqual(self.request("POST", "/sdcpp/v1/jobs/nope/cancel")[0], 404)
