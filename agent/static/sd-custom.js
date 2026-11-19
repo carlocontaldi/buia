@@ -7,7 +7,7 @@
   const api = (p, b) => fetch("/api/sd/" + p, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(b)})
     .then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || r.statusText); return j; });
   const box = document.createElement("div");
-  box.style.cssText = "margin:8px 0;padding:8px;border:1px solid var(--border,#8884);border-radius:8px";
+  box.style.cssText = "margin:8px 0;padding:8px;border:1px solid var(--line);border-radius:8px";
   box.innerHTML = '<b>Add an image/video model from Hugging Face</b>' +
     '<div style="display:flex;gap:6px;margin-top:6px"><input class="sd-repo" placeholder="owner/repo" style="flex:1">' +
     '<button class="sd-check">Check</button></div><div class="sd-out" style="margin-top:6px"></div>';
