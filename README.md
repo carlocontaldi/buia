@@ -9,19 +9,14 @@
 >
 > **BUIA**: *Bottega Unipersonale d'Intelligenza Artificiale*, a one-person AI workshop.
 
+---
+
 A local standalone personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
 It generates text, images and videos, reads and writes your notes through file tools, searches the web and reads pages, remembers things in `BUIA.md`, streams replies, keeps chat history as JSON files, and can be reached from your phone over Tailscale.
 
-<h1 align="center">
-</h1>
-
-<h1 align="center">
 <p1 align="center">
   <img src="assets/buia-banner.png" alt="" width="1280"><br>
-</h1>
 </p1>
-
----
 
 | Service | Started | What it does |
 |---|---|---|
