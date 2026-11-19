@@ -248,6 +248,7 @@ class VideoApiTests(unittest.TestCase):
             saved = json.loads(next(Path(chats).glob("*.json")).read_text(encoding="utf-8"))
             self.assertNotIn("in_progress", saved["messages"][-2])
             self.assertIn("interrupted", saved["messages"][-1]["content"])
+            self.assertTrue(saved["messages"][-1]["notice"])
 
     def test_completed_chat_does_not_release_gpu_transferred_to_generation_job(self):
         cid = "20261119-120000-0001"
@@ -259,6 +260,55 @@ class VideoApiTests(unittest.TestCase):
         agent.release_unstarted_chat(cid, owner)
         self.assertEqual(agent.GPU_OWNER, owner)
         agent.release_gpu(owner)
+
+    def test_late_cleanup_of_an_earlier_turn_leaves_the_next_turn_of_the_same_chat_alone(self):
+        async def fake_llm_stream(msgs, think=None):
+            yield "delta", "reply"
+            yield "message", {"role": "assistant", "content": "reply"}
+
+        async def consume(iterator):
+            async for _ in iterator:
+                pass
+
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)), \
+                patch.object(agent, "llm_stream", fake_llm_stream):
+            first = agent.chat_turn(agent.Ask(message="one"))
+            cid = next(Path(chats).glob("*.json")).stem
+            first_owner = agent.GPU_OWNER
+            asyncio.run(consume(first.body_iterator))  # finished: its reservation is released
+            second = agent.chat_turn(agent.Ask(message="two", chat_id=cid))
+            second_owner = agent.GPU_OWNER
+            self.assertNotEqual(first_owner, second_owner)
+
+            agent.release_unstarted_chat(cid, first_owner)  # the first response's cleanup task, running late
+
+            self.assertIn(cid, agent.ACTIVE_CHATS)
+            self.assertEqual(agent.GPU_OWNER, second_owner)
+            saved = json.loads((Path(chats) / f"{cid}.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["messages"][-1]["in_progress"]["boot"], agent.BOOT)
+            asyncio.run(consume(second.body_iterator))
+            saved = json.loads((Path(chats) / f"{cid}.json").read_text(encoding="utf-8"))
+            self.assertEqual([m["content"] for m in saved["messages"]], ["one", "reply", "two", "reply"])
+
+    def test_a_turn_the_model_never_answered_is_not_replayed_to_it(self):
+        async def failing_llm_stream(msgs, think=None):
+            raise RuntimeError("llama is down")
+            yield  # makes this an async generator
+
+        async def consume(iterator):
+            async for _ in iterator:
+                pass
+
+        with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)), \
+                patch.object(agent, "llm_stream", failing_llm_stream):
+            response = agent.chat_turn(agent.Ask(message="lost question"))
+            asyncio.run(consume(response.body_iterator))
+            saved = json.loads(next(Path(chats).glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual([m["role"] for m in saved["messages"]], ["user", "assistant"])  # the chat still shows what happened
+        self.assertTrue(saved["messages"][-1]["notice"])
+        self.assertEqual(agent.history_for_model(saved["messages"]), [])
+        around = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}] + saved["messages"] + [{"role": "user", "content": "c"}]
+        self.assertEqual([m["content"] for m in agent.history_for_model(around)], ["a", "b", "c"])
 
     def test_unfinished_saved_user_turn_is_recovered_after_restart(self):
         with tempfile.TemporaryDirectory() as chats, patch.object(agent, "CHATS", Path(chats)):
@@ -275,6 +325,7 @@ class VideoApiTests(unittest.TestCase):
                 recovered = agent.load_chat(cid)
             self.assertEqual([m["role"] for m in recovered["messages"]], ["user", "assistant"])
             self.assertIn("restarted", recovered["messages"][-1]["content"])
+            self.assertTrue(recovered["messages"][-1]["notice"])
             self.assertNotIn("in_progress", recovered["messages"][0])
 
     def test_chat_cannot_be_deleted_while_its_turn_is_running(self):
@@ -419,6 +470,10 @@ class VideoApiTests(unittest.TestCase):
                 results = agent.search_files("needle", "workspace", limit=2)
                 self.assertIn("note-0.txt", results)
                 self.assertIn("offset=2", results)
+                past_the_end = agent.search_files("needle", "workspace", offset=9)
+                self.assertIn("5 in total", past_the_end)
+                self.assertNotIn("showing", past_the_end)
+                self.assertEqual(agent.search_files("absent", "workspace"), "no matches")
                 target = workspace / "note-0.txt"
                 with patch.object(agent.os, "replace", side_effect=OSError("replace failed")):
                     with self.assertRaisesRegex(OSError, "replace failed"):
