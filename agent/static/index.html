@@ -36,7 +36,7 @@
   button { font: inherit; border: 0; border-radius: 8px; padding: 8px 14px; background: var(--accent); color: var(--accent-fg); }
   button.plain { background: none; color: var(--mute); padding: 4px 8px; }
   #stop { background: #dc2626; color: #fff; }
-  #panel, #mpanel, #vpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
+  #panel, #mpanel, #vpanel, #gpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
   h3 { margin: 14px 0 6px; font-size: 14px; }
   .muted { font-size: 12px; color: var(--mute); margin: 2px 0; }
   .bad { color: #dc2626; font-size: 12px; }
@@ -137,7 +137,7 @@
   <button class="plain" id="models">Models</button>
   <button class="plain" id="new">New</button>
 </header>
- <div id="status" role="status" aria-live="polite">…</div>
+<div id="status" role="status" aria-live="polite">…</div>
 <div id="panel" hidden></div>
 <div id="mpanel" hidden>
   <h3>This machine</h3><div id="mhw" class="muted">…</div>
@@ -146,32 +146,32 @@
   <input id="repo" placeholder="owner/repo on Hugging Face" autocomplete="off" autocapitalize="off" spellcheck="false">
   <div id="chips"><span class="muted">Examples:</span></div>
   <button id="check" style="margin-top:8px">Check quants</button>
-   <div id="msg" role="alert" aria-live="assertive"></div>
+  <div id="msg" role="alert" aria-live="assertive"></div>
   <div id="mres"></div>
   <h3>Image and video models</h3>
   <div id="sdinfo" class="muted"></div>
   <div class="row"><button id="vopen">Video dashboard</button></div>
-   <div id="sdmsg" class="bad" role="alert" aria-live="assertive"></div>
+  <div id="sdmsg" class="bad" role="alert" aria-live="assertive"></div>
   <div id="sdlist"></div>
 </div>
 <div id="vpanel" hidden>
   <div class="row"><h3 style="flex: 1; margin: 0">Video</h3><button id="vclose" class="plain">Close</button></div>
   <select id="vmodel" class="vin" title="Video model"></select>
   <div id="vinfo" class="muted"></div>
-   <label for="vprompt" class="muted">Describe the video</label>
-   <textarea id="vprompt" class="vin" rows="3" required></textarea>
+  <label for="vprompt" class="muted">Describe the video</label>
+  <textarea id="vprompt" class="vin" rows="3" required></textarea>
   <div id="vform" class="vf"></div>
   <div class="row"><button id="vgo">Generate</button><button id="vreset" class="plain" title="Put this model's parameters back to their defaults">Reset parameters</button></div>
   <div id="vrun" hidden>
     <progress id="vbar" max="100" title="One bar for all phases: the step counter beside it is exact, the bar's sections are only a layout."></progress>
-   <div id="vtxt" class="muted"></div>
+    <div id="vtxt" class="muted"></div>
     <button id="vcancel" class="plain" title="Stop this video. A CogVideoX job is stopped at once; the sd video server cannot interrupt a job, so it is restarted (a few seconds, the model loads again).">Cancel</button>
   </div>
-   <div id="vmsg" class="bad" role="alert" aria-live="assertive"></div>
-   <div id="vannounce" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></div>
+  <div id="vmsg" class="bad" role="alert" aria-live="assertive"></div>
+  <div id="vannounce" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></div>
   <div id="vout"></div>
 </div>
- <div id="gpanel" hidden></div>
+<div id="gpanel" hidden></div>
 <div id="log"></div>
 <div id="welcome"><img src="/buia-logo-256.png" alt="" width="124" height="124" loading="lazy"><h1>Hey! 👋</h1><p>How can I help you today?</p></div>
 <form id="f">
@@ -516,7 +516,7 @@ async function openChat(id) {
   if (c.messages.some(m => m.pending || m.in_progress)) watchPending(c.id);
 }
 
-function renderChatRows(chats, nextOffset) {
+function renderChatRows(list, chats, nextOffset) {
   for (const c of chats) {
     const row = document.createElement('div'), t = document.createElement('button'), d = document.createElement('small'), x = document.createElement('button');
     row.className = 'row'; t.className = 'plain chat-title'; t.type = 'button'; t.textContent = c.corrupt ? 'Unreadable chat file' : c.title;
@@ -534,29 +534,31 @@ function renderChatRows(chats, nextOffset) {
       t.onclick = () => openChat(c.id);
       row.append(t, d, x);
     }
-    panel.append(row);
+    list.append(row);
   }
   if (nextOffset != null) {
     const more = el('button', { class: 'plain', textContent: 'Load more chats', onclick: () => {
-      more.remove(); loadChatPage(nextOffset).catch(e => panel.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })));
+      more.remove(); loadChatPage(list, nextOffset).catch(e => list.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })));
     }});
-    panel.append(more);
+    list.append(more);
   }
 }
-async function loadChatPage(offset) {
+async function loadChatPage(list, offset) {
   const page = await api('GET', '/api/chats?offset=' + offset);
-  renderChatRows(page.chats, page.next_offset);
+  renderChatRows(list, page.chats, page.next_offset);
 }
 async function showChats() {
   mpanel.hidden = true; vpanel.hidden = true; gpanel.hidden = true;
   if (!panel.hidden) { panel.hidden = true; return; }
   panel.textContent = '';
   panel.append(el('div', { class: 'row' }, el('button', { class: 'plain', textContent: 'Generated media', onclick: () => showGeneratedMedia() })));
+  const list = el('div');
+  panel.append(list);
   try {
     const page = await api('GET', '/api/chats?offset=0');
-    if (!page.chats.length) panel.append(el('div', { class: 'muted', textContent: 'No saved chats yet.' }));
-    renderChatRows(page.chats, page.next_offset);
-  } catch (e) { panel.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })); }
+    if (!page.chats.length) list.append(el('div', { class: 'muted', textContent: 'No saved chats yet.' }));
+    renderChatRows(list, page.chats, page.next_offset);
+  } catch (e) { list.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })); }
   panel.append(el('div', { class: 'row' }, el('label', { htmlFor: 'theme', textContent: 'Theme' }), themeSel));
   panel.append(el('button', { class: 'plain', textContent: 'Log out', onclick: async () => { await fetch('/api/logout', { method: 'POST' }); newChat(); showLogin(); } }));
   panel.hidden = false;
