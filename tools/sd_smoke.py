@@ -1,14 +1,14 @@
 r"""First small video job against sd-server (native sdcpp API). Run it inside the agent container (PowerShell, from the buia-core folder):
     docker compose cp ..\tools\sd_smoke.py agent:/tmp/sd_smoke.py
     docker compose exec -T agent python /tmp/sd_smoke.py 256 256 9 10      # width height frames steps
-Saves /data/workspace/sd_smoke.<format>  (= sd_smoke.<format> in your buia folder on Windows).
+Saves /data/workspace/generated/sd_smoke.<format>  (= generated\sd_smoke.<format> in your buia folder on Windows).
 Request fields follow examples/server/api.md at master-920-2f88688; omitted fields keep the server defaults."""
 import base64, os, sys, time
 
 import httpx
 
 SD = os.environ.get("SD_URL", "http://sd:1234")
-OUT = os.environ.get("OUT_DIR", "/data/workspace")
+OUT = os.environ.get("OUT_DIR", "/data/workspace/generated")
 args = sys.argv[1:]
 w, h, frames, steps = (int(a) for a in args) if len(args) == 4 else (256, 256, 9, 10)
 body = {"prompt": "a red ball rolling across a wooden floor, soft light", "width": w, "height": h,
@@ -36,6 +36,7 @@ while time.time() - t0 < 1800:
             data = httpx.get(SD + url, timeout=120).content
         else:  # sd-server embeds the video as base64
             data = base64.b64decode(res["b64_json"])
+        os.makedirs(OUT, exist_ok=True)
         with open(path, "wb") as f:
             f.write(data)
         print(f"done in {time.time() - t0:.1f}s: {res['frame_count']} frames at {res['fps']} fps -> {path} ({os.path.getsize(path)} bytes)")
