@@ -304,6 +304,11 @@ def inside_sd(d):
     except (OSError, RuntimeError):
         return False
 
+def shell_unsafe(path: str) -> bool:
+    """sd-run.sh hands the flags to sd-server through unquoted word splitting and globbing: a space would cut such a path in two,
+    and * ? [ ] would be expanded."""
+    return any(c.isspace() or c in "*?[]" for c in path)
+
 def custom_ok(p):
     if not isinstance(p, dict) or not p.get("custom") or p.get("family") not in TEMPLATES or p.get("engine"):
         return False
@@ -321,8 +326,6 @@ def custom_ok(p):
         if not isinstance(f, (list, tuple)) or len(f) not in (2, 3) or not all(isinstance(x, str) for x in f):
             return False
         if not REPO_RE.fullmatch(f[0]) or Path(f[1]).is_absolute() or ".." in Path(f[1]).parts:
-            return False
-        if any(c.isspace() or c in "*?[]" for part in f[1:] for c in part):
             return False
         if len(f) > 2 and (Path(f[2]).is_absolute() or ".." in Path(f[2]).parts):
             return False
@@ -360,7 +363,7 @@ def clean_path(path):
     path = path.strip().strip("/")
     if not path or "\\" in path or ".." in Path(path).parts:
         raise HTTPException(400, "invalid file path")
-    if any(c.isspace() for c in path) or any(c in path for c in "*?[]"):
+    if shell_unsafe(path):
         raise HTTPException(400, "file paths cannot contain whitespace or shell wildcard characters")
     return path
 
@@ -679,6 +682,8 @@ async def api_cancel(body: IdBody):
 @router.post("/use")
 async def api_use(body: IdBody):
     p = preset(body.id)
+    if any(shell_unsafe(part) for f in p["files"] for part in f[1:]):  # saved before clean_path refused such paths: kept, but never started
+        raise HTTPException(409, "this model's file path contains a space or a wildcard character, which the server start script cannot pass on; remove it from the panel")
     if not all(dest(f).exists() for f in p["files"]):
         raise HTTPException(409, "download the model first")
     if p.get("engine"):  # the sd video server keeps its last model (idle, its weights stay on disk) and gets no jobs
