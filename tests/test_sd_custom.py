@@ -106,8 +106,20 @@ class CustomModels(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(self.sd.HTTPException) as e:
                 self.sd.clean_path(path)
             self.assertEqual(e.exception.status_code, 400)
+
+    def test_saved_custom_model_with_an_unsafe_path_is_kept_but_not_started(self):
         legacy = self.sd.make_custom("someone/repo", "folder/model file.gguf", "wan21-t2v-1.3b")
-        self.assertFalse(self.sd.custom_ok(legacy))
+        with tempfile.TemporaryDirectory() as models_dir, mock.patch.object(self.sd, "SD_DIR", Path(models_dir)), \
+                mock.patch.object(self.sd, "PRESETS", [*self.sd.PRESETS, legacy]):
+            self.assertTrue(self.sd.custom_ok(legacy))  # saved before the rule: not dropped from custom.json by the next save
+            for f in legacy["files"]:
+                self.sd.dest(f).parent.mkdir(parents=True, exist_ok=True)
+                self.sd.dest(f).write_text("x")
+            with self.assertRaises(self.sd.HTTPException) as e:
+                asyncio.run(self.sd.api_use(self.sd.IdBody(id=legacy["id"])))
+            self.assertEqual(e.exception.status_code, 409)
+            self.assertIn("space", e.exception.detail)
+            self.assertFalse((Path(models_dir) / f"active-{legacy['kind']}.args").exists())  # sd-run.sh was not handed the broken flags
 
     def test_cogvideo_has_no_customs(self):
         # the cogvideo service reads one fixed folder (sdmodels/CogVideoX-2b): a second repo would share files with the preset
