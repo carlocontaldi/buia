@@ -1,4 +1,4 @@
-# Installs or re-applies BUIA. Run from this folder:  .\install.ps1
+# Installs or re-applies BUIA. Run .\install.cmd in the folder above (it calls this script with the execution policy bypassed), or .\install.ps1 from this folder.
 # Add -Tailscale to also expose the UI to your tailnet (phone access).
 # Add -Sd to also set up image/video generation (clones stable-diffusion.cpp and builds the sd service; the first build is long).
 # Add -CogVideo to also build the cogvideo service (CogVideoX-2b text-to-video, PyTorch; the first build downloads several GB).
@@ -54,7 +54,7 @@ $buia  = ((Get-Content .env) | Where-Object { $_ -match '^BUIA_PATH=' }) -replac
 $vault = ((Get-Content .env) | Where-Object { $_ -match '^VAULT_PATH=' }) -replace '^VAULT_PATH=', ''
 New-Item -ItemType Directory -Force -Path $buia, $vault | Out-Null
 if (-not (Test-Path "$buia/BUIA.md")) {
-    Copy-Item templates/BUIA.md "$buia/BUIA.md"
+    Copy-Item ../templates/BUIA.md "$buia/BUIA.md"
     Write-Host "Created $buia/BUIA.md from the template"
 }
 
