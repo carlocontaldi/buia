@@ -537,8 +537,12 @@ function renderChatRows(list, chats, nextOffset) {
     list.append(row);
   }
   if (nextOffset != null) {
-    const more = el('button', { class: 'plain', textContent: 'Load more chats', onclick: () => {
-      more.remove(); loadChatPage(list, nextOffset).catch(e => list.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })));
+    let failed;
+    const more = el('button', { class: 'plain', textContent: 'Load more chats', onclick: async () => {
+      more.disabled = true;
+      if (failed) failed.remove();
+      try { await loadChatPage(list, nextOffset); more.remove(); }
+      catch (e) { more.disabled = false; failed = el('div', { class: 'bad', role: 'alert', textContent: e.message }); list.append(failed); }
     }});
     list.append(more);
   }
