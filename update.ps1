@@ -51,10 +51,9 @@ while ($wait.Elapsed.TotalSeconds -lt 120 -and -not $ready) {
     if (-not $ready -and $wait.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Seconds ([math]::Min(2, [math]::Max(1, [math]::Floor(120 - $wait.Elapsed.TotalSeconds)))) }
 }
 if (-not $ready) {
-    Write-Warning "BUIA did not become ready. Current services and recent logs:"
+    Write-Warning "BUIA is not ready after 120 seconds (the model may still be loading). Current services and recent logs:"
     docker compose @compose ps
     docker compose @compose logs --tail 50 llama agent
-    throw "BUIA did not become ready within 120 seconds. Fix the service startup issue and rerun .\update.cmd."
 }
 
 docker compose @compose ps
