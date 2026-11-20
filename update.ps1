@@ -42,6 +42,20 @@ if ($Llama) {
 docker compose @compose up -d --build
 Check "docker compose up"
 
+Write-Host "Waiting for BUIA..."
+$ready = $false
+$wait = [Diagnostics.Stopwatch]::StartNew()
+while ($wait.Elapsed.TotalSeconds -lt 120 -and -not $ready) {
+    $remaining = [math]::Max(1, [math]::Ceiling(120 - $wait.Elapsed.TotalSeconds))
+    try { $ready = [bool](Invoke-RestMethod http://127.0.0.1:8000/api/health -TimeoutSec ([math]::Min(3, $remaining))).ready } catch { }
+    if (-not $ready -and $wait.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Seconds ([math]::Min(2, [math]::Max(1, [math]::Floor(120 - $wait.Elapsed.TotalSeconds)))) }
+}
+if (-not $ready) {
+    Write-Warning "BUIA is not ready after 120 seconds (the model may still be loading). Current services and recent logs:"
+    docker compose @compose ps
+    docker compose @compose logs --tail 50 llama agent
+}
+
 docker compose @compose ps
 Write-Host ""
 Write-Host "Updated. If a release note says new settings were added, compare your .env with .env.example."

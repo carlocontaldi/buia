@@ -19,6 +19,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -99,6 +100,7 @@ BASES = {
 }
 
 RUN: dict[str, dict] = {}  # preset id -> {"state": "downloading" | "failed", "done", "total", "message", "task"}; absent when idle
+RUN_LOCK = threading.Lock()
 
 
 def preset(pid: str) -> dict:
@@ -137,8 +139,8 @@ def put(path: Path, text: str) -> None:
 
 
 def restart_server(kind: str) -> None:
-    """Makes sd-run.sh restart the sd-server of this kind with the flags it has now (it restarts on any change of the modification time of
-    active-<kind>.args, in whole seconds). The only way to end a job that is generating: sd-server cannot interrupt one."""
+    """Makes sd-run.sh restart the sd-server of this kind with the flags it has now. The only way to end a job that is generating:
+    sd-server cannot interrupt one."""
     f = SD_DIR / f"active-{kind}.args"
     try:
         t = max(time.time(), int(f.stat().st_mtime) + 1)
@@ -302,6 +304,11 @@ def inside_sd(d):
     except (OSError, RuntimeError):
         return False
 
+def shell_unsafe(path: str) -> bool:
+    """sd-run.sh hands the flags to sd-server through unquoted word splitting and globbing: a space would cut such a path in two,
+    and * ? [ ] would be expanded."""
+    return any(c.isspace() or c in "*?[]" for c in path)
+
 def custom_ok(p):
     if not isinstance(p, dict) or not p.get("custom") or p.get("family") not in TEMPLATES or p.get("engine"):
         return False
@@ -356,6 +363,8 @@ def clean_path(path):
     path = path.strip().strip("/")
     if not path or "\\" in path or ".." in Path(path).parts:
         raise HTTPException(400, "invalid file path")
+    if shell_unsafe(path):
+        raise HTTPException(400, "file paths cannot contain whitespace or shell wildcard characters")
     return path
 
 async def fetch_tree(repo):
@@ -566,12 +575,18 @@ async def fetch_all(p: dict, infs: list[dict], run: dict) -> None:
                 continue
             await fetch_file(f[0], f[1], d, info, lambda n, b=base: run.update(done=b + n))
             base += info["size"]
-        RUN.pop(p["id"], None)  # finished: the files on disk are the state
+        with RUN_LOCK:
+            if RUN.get(p["id"]) is run:
+                RUN.pop(p["id"], None)  # finished: the files on disk are the state
     except asyncio.CancelledError:
-        RUN.pop(p["id"], None)
+        with RUN_LOCK:
+            if RUN.get(p["id"]) is run:
+                RUN.pop(p["id"], None)
         raise
     except Exception as e:  # shown in the panel; Download again continues from the .part files
-        run.update(state="failed", message=f"{type(e).__name__}: {e}"[:300])
+        with RUN_LOCK:
+            if RUN.get(p["id"]) is run:
+                run.update(state="failed", message=f"{type(e).__name__}: {e}"[:300])
 
 
 # ---------- API ----------
@@ -626,26 +641,39 @@ async def api_list():
 @router.post("/download")
 async def api_download(body: IdBody):
     p = preset(body.id)
-    if any(r["state"] == "downloading" for r in RUN.values()):
-        raise HTTPException(409, "another download is running; wait for it or cancel it")
-    infs = await infos(p)
-    SD_DIR.mkdir(parents=True, exist_ok=True)
-    missing = [(f, i) for f, i in zip(p["files"], infs) if not dest(f).exists()]
-    if not missing:
-        raise HTTPException(409, "already downloaded")
-    parts = sum(dest(f).with_name(dest(f).name + ".part").stat().st_size for f, _ in missing if dest(f).with_name(dest(f).name + ".part").exists())
-    if shutil.disk_usage(SD_DIR).free < sum(i["size"] for _, i in missing) - parts + 1024 * MB:
-        raise HTTPException(409, "not enough free disk space for this download")
-    run = {"state": "downloading", "done": 0, "total": sum(i["size"] for i in infs), "message": ""}
-    RUN[p["id"]] = run
-    run["task"] = asyncio.create_task(fetch_all(p, infs, run))
-    return {"id": p["id"]}
+    with RUN_LOCK:
+        if any(r["state"] == "downloading" for r in RUN.values()):
+            raise HTTPException(409, "another download is running; wait for it or cancel it")
+        run = {"state": "downloading", "done": 0, "total": 0, "message": "checking model files"}
+        RUN[p["id"]] = run
+    try:
+        infs = await infos(p)
+        SD_DIR.mkdir(parents=True, exist_ok=True)
+        missing = [(f, i) for f, i in zip(p["files"], infs) if not dest(f).exists()]
+        if not missing:
+            raise HTTPException(409, "already downloaded")
+        parts = sum(dest(f).with_name(dest(f).name + ".part").stat().st_size for f, _ in missing if dest(f).with_name(dest(f).name + ".part").exists())
+        if shutil.disk_usage(SD_DIR).free < sum(i["size"] for _, i in missing) - parts + 1024 * MB:
+            raise HTTPException(409, "not enough free disk space for this download")
+        with RUN_LOCK:
+            if RUN.get(p["id"]) is not run:
+                raise HTTPException(409, "download was cancelled")
+            run.update(total=sum(i["size"] for i in infs), message="")
+            run["task"] = asyncio.create_task(fetch_all(p, infs, run))
+        return {"id": p["id"]}
+    except BaseException:
+        with RUN_LOCK:
+            if RUN.get(p["id"]) is run:
+                RUN.pop(p["id"], None)
+        raise
 
 
 @router.post("/cancel")
 async def api_cancel(body: IdBody):
     """Stops a running download (the .part files stay, so Download continues) or clears a failed one."""
-    run = RUN.pop(preset(body.id)["id"], None)
+    pid = preset(body.id)["id"]
+    with RUN_LOCK:
+        run = RUN.pop(pid, None)
     if run and run.get("task"):
         run["task"].cancel()
     return {"ok": True}
@@ -654,6 +682,8 @@ async def api_cancel(body: IdBody):
 @router.post("/use")
 async def api_use(body: IdBody):
     p = preset(body.id)
+    if any(shell_unsafe(part) for f in p["files"] for part in f[1:]):  # saved before clean_path refused such paths: kept, but never started
+        raise HTTPException(409, "this model's file path contains a space or a wildcard character, which the server start script cannot pass on; remove it from the panel")
     if not all(dest(f).exists() for f in p["files"]):
         raise HTTPException(409, "download the model first")
     if p.get("engine"):  # the sd video server keeps its last model (idle, its weights stay on disk) and gets no jobs
@@ -734,9 +764,10 @@ async def api_add(body: AddBody):
 @router.delete("/models")
 async def api_delete(id: str):
     p = preset(id)
-    if RUN.get(id, {}).get("state") == "downloading":
-        raise HTTPException(409, "cancel the download first")
-    RUN.pop(id, None)
+    with RUN_LOCK:
+        if RUN.get(id, {}).get("state") == "downloading":
+            raise HTTPException(409, "cancel the download first")
+        RUN.pop(id, None)
     for f in p["files"]:
         if shared(p, dest(f)):
             continue

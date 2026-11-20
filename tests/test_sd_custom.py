@@ -79,6 +79,12 @@ class CustomModels(unittest.TestCase):
         cls.env.stop()
         cls.tmp.cleanup()
 
+    def setUp(self):
+        self.sd.RUN.clear()
+
+    def tearDown(self):
+        self.sd.RUN.clear()
+
     def test_fit_result(self):
         self.assertIsNone(self.sd.fit_result(0, 8192, "estimate", "ref"))
         self.assertIsNone(self.sd.fit_result(1000, 0, "estimate", "ref"))
@@ -94,6 +100,26 @@ class CustomModels(unittest.TestCase):
         self.assertNotIn("wan2.1_t2v_1.3B_fp16.safetensors", p["args"])
         self.assertIn("umt5-xxl-encoder-Q4_K_S.gguf", p["args"])
         self.assertEqual(p["family"], "wan21-t2v-1.3b")
+
+    def test_custom_path_rejects_shell_word_splitting_and_wildcards(self):
+        for path in ("folder/model file.gguf", "folder/model\tfile.gguf", "folder/model*.gguf", "folder/model[1].gguf"):
+            with self.subTest(path=path), self.assertRaises(self.sd.HTTPException) as e:
+                self.sd.clean_path(path)
+            self.assertEqual(e.exception.status_code, 400)
+
+    def test_saved_custom_model_with_an_unsafe_path_is_kept_but_not_started(self):
+        legacy = self.sd.make_custom("someone/repo", "folder/model file.gguf", "wan21-t2v-1.3b")
+        with tempfile.TemporaryDirectory() as models_dir, mock.patch.object(self.sd, "SD_DIR", Path(models_dir)), \
+                mock.patch.object(self.sd, "PRESETS", [*self.sd.PRESETS, legacy]):
+            self.assertTrue(self.sd.custom_ok(legacy))  # saved before the rule: not dropped from custom.json by the next save
+            for f in legacy["files"]:
+                self.sd.dest(f).parent.mkdir(parents=True, exist_ok=True)
+                self.sd.dest(f).write_text("x")
+            with self.assertRaises(self.sd.HTTPException) as e:
+                asyncio.run(self.sd.api_use(self.sd.IdBody(id=legacy["id"])))
+            self.assertEqual(e.exception.status_code, 409)
+            self.assertIn("space", e.exception.detail)
+            self.assertFalse((Path(models_dir) / f"active-{legacy['kind']}.args").exists())  # sd-run.sh was not handed the broken flags
 
     def test_cogvideo_has_no_customs(self):
         # the cogvideo service reads one fixed folder (sdmodels/CogVideoX-2b): a second repo would share files with the preset
@@ -235,6 +261,43 @@ class CustomModels(unittest.TestCase):
             self.assertTrue((self.sd.SD_DIR / "custom.json").exists())
             asyncio.run(self.sd.api_delete(added["id"]))
             self.assertFalse(any(x["id"] == added["id"] for x in self.sd.PRESETS))
+
+    def test_download_is_reserved_before_metadata_lookup(self):
+        async def scenario():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+            calls = 0
+
+            async def delayed_infos(p):
+                nonlocal calls
+                calls += 1
+                entered.set()
+                await release.wait()
+                return [{"size": 1, "sha256": None} for _ in p["files"]]
+
+            async def no_download(p, infs, run):
+                return None
+
+            with mock.patch.object(self.sd, "infos", delayed_infos), mock.patch.object(self.sd, "fetch_all", no_download):
+                first = asyncio.create_task(self.sd.api_download(self.sd.IdBody(id="wan21-t2v-1.3b")))
+                await entered.wait()
+                try:
+                    with self.assertRaises(self.sd.HTTPException) as e:
+                        await asyncio.wait_for(self.sd.api_download(self.sd.IdBody(id="wan21-t2v-1.3b")), timeout=0.2)
+                    self.assertEqual(e.exception.status_code, 409)
+                except asyncio.TimeoutError:
+                    self.fail("the second request waited for metadata instead of observing the active reservation")
+                finally:
+                    release.set()
+                result = await first
+                await self.sd.RUN["wan21-t2v-1.3b"]["task"]
+                self.assertEqual(result, {"id": "wan21-t2v-1.3b"})
+                self.assertEqual(calls, 1)
+
+        with tempfile.TemporaryDirectory() as models_dir, \
+                mock.patch.object(self.sd, "SD_DIR", Path(models_dir)), \
+                mock.patch.object(self.sd.shutil, "disk_usage", return_value=types.SimpleNamespace(free=10**12)):
+            asyncio.run(scenario())
 
     def test_load_custom_rejects_traversal(self):
         bad = [{"id": "evil", "custom": True, "family": "wan21-t2v-1.3b", "kind": "video", "args": "",
