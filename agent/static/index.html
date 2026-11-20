@@ -36,7 +36,7 @@
   button { font: inherit; border: 0; border-radius: 8px; padding: 8px 14px; background: var(--accent); color: var(--accent-fg); }
   button.plain { background: none; color: var(--mute); padding: 4px 8px; }
   #stop { background: #dc2626; color: #fff; }
-  #panel, #mpanel, #vpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
+  #panel, #mpanel, #vpanel, #gpanel { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; z-index: 2; overflow-y: auto; background: var(--bg); padding: 8px 12px; }
   h3 { margin: 14px 0 6px; font-size: 14px; }
   .muted { font-size: 12px; color: var(--mute); margin: 2px 0; }
   .bad { color: #dc2626; font-size: 12px; }
@@ -48,11 +48,12 @@
   .q button { margin-top: 6px; padding: 4px 12px; }
   .q button:disabled { background: #8886; }
   #msg { font-size: 12px; color: #dc2626; min-height: 1em; }
-  #repo { width: 100%; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }
-  .chip { display: inline-block; font-size: 12px; margin: 4px 6px 0 0; padding: 2px 8px; border-radius: 99px; background: var(--bot); cursor: pointer; }
+  #repo, .sd-repo { width: 100%; font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }  /* .sd-repo: the field sd-custom.js adds */
+  .chip { display: inline-block; font: inherit; font-size: 12px; margin: 4px 6px 0 0; padding: 2px 8px; border: 0; border-radius: 99px; background: var(--bot); color: var(--fg); cursor: pointer; }
   progress { flex: 0 0 90px; }
   .row { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
   .row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .row .chat-title { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row small { color: var(--mute); }
   #theme { font: inherit; font-size: 14px; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 6px; }
   #login { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; background: var(--bg); }
@@ -79,11 +80,11 @@
   :root[data-theme="buia"] .brand img { width: 28px; height: 28px; }
   :root[data-theme="buia"] .brand b { display: none; font-size: 17px; letter-spacing: .1em; }
   :root[data-theme="buia"] #status { flex: none; height: 28px; line-height: 27px; padding: 0 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #020a06aa; border-bottom: 1px solid #1e5a3a44; }
-  :root[data-theme="buia"] #panel, :root[data-theme="buia"] #mpanel, :root[data-theme="buia"] #vpanel { top: 84px; background: #020b07f2; backdrop-filter: blur(14px); }
+  :root[data-theme="buia"] #panel, :root[data-theme="buia"] #mpanel, :root[data-theme="buia"] #vpanel, :root[data-theme="buia"] #gpanel { top: 84px; background: #020b07f2; backdrop-filter: blur(14px); }
   :root[data-theme="buia"] #status::before { content: ""; display: inline-block; width: 16px; height: 16px; margin-right: 8px; vertical-align: -3px; background: url(/buia-icon-64.png) center / contain no-repeat; }
   :root[data-theme="buia"] #thinkl { font-size: 13px; }
-  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin) { background: #0c1f19; border: 1px solid #1d4633; border-radius: 12px; color: var(--fg); }
-  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin):focus { outline: none; border-color: #3df97a99; box-shadow: 0 0 0 3px #3df97a22; }
+  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin, .sd-repo) { background: #0c1f19; border: 1px solid #1d4633; border-radius: 12px; color: var(--fg); }
+  :root[data-theme="buia"] :is(#msel, #theme, #repo, #pw, #box, .vin, .sd-repo):focus { outline: none; border-color: #3df97a99; box-shadow: 0 0 0 3px #3df97a22; }
   :root[data-theme="buia"] #msel { padding: 6px 8px; }
   :root[data-theme="buia"] #box { border-radius: 18px; padding: 12px 14px; }
   :root[data-theme="buia"] button { background: var(--btn); color: #fff; border: 1px solid #3df97a55; border-radius: 999px; font-weight: 600; cursor: pointer; }
@@ -136,7 +137,7 @@
   <button class="plain" id="models">Models</button>
   <button class="plain" id="new">New</button>
 </header>
-<div id="status">…</div>
+<div id="status" role="status" aria-live="polite">…</div>
 <div id="panel" hidden></div>
 <div id="mpanel" hidden>
   <h3>This machine</h3><div id="mhw" class="muted">…</div>
@@ -145,19 +146,20 @@
   <input id="repo" placeholder="owner/repo on Hugging Face" autocomplete="off" autocapitalize="off" spellcheck="false">
   <div id="chips"><span class="muted">Examples:</span></div>
   <button id="check" style="margin-top:8px">Check quants</button>
-  <div id="msg"></div>
+  <div id="msg" role="alert" aria-live="assertive"></div>
   <div id="mres"></div>
   <h3>Image and video models</h3>
   <div id="sdinfo" class="muted"></div>
   <div class="row"><button id="vopen">Video dashboard</button></div>
-  <div id="sdmsg" class="bad"></div>
+  <div id="sdmsg" class="bad" role="alert" aria-live="assertive"></div>
   <div id="sdlist"></div>
 </div>
 <div id="vpanel" hidden>
   <div class="row"><h3 style="flex: 1; margin: 0">Video</h3><button id="vclose" class="plain">Close</button></div>
   <select id="vmodel" class="vin" title="Video model"></select>
   <div id="vinfo" class="muted"></div>
-  <textarea id="vprompt" class="vin" rows="3" placeholder="Describe the video"></textarea>
+  <label for="vprompt" class="muted">Describe the video</label>
+  <textarea id="vprompt" class="vin" rows="3" required></textarea>
   <div id="vform" class="vf"></div>
   <div class="row"><button id="vgo">Generate</button><button id="vreset" class="plain" title="Put this model's parameters back to their defaults">Reset parameters</button></div>
   <div id="vrun" hidden>
@@ -165,9 +167,11 @@
     <div id="vtxt" class="muted"></div>
     <button id="vcancel" class="plain" title="Stop this video. A CogVideoX job is stopped at once; the sd video server cannot interrupt a job, so it is restarted (a few seconds, the model loads again).">Cancel</button>
   </div>
-  <div id="vmsg" class="bad"></div>
+  <div id="vmsg" class="bad" role="alert" aria-live="assertive"></div>
+  <div id="vannounce" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></div>
   <div id="vout"></div>
 </div>
+<div id="gpanel" hidden></div>
 <div id="log"></div>
 <div id="welcome"><img src="/buia-logo-256.png" alt="" width="124" height="124" loading="lazy"><h1>Hey! 👋</h1><p>How can I help you today?</p></div>
 <form id="f">
@@ -177,7 +181,7 @@
 </form>
 <script>
 const $ = id => document.getElementById(id);
-const log = $('log'), box = $('box'), panel = $('panel'), vpanel = $('vpanel');
+const log = $('log'), box = $('box'), panel = $('panel'), vpanel = $('vpanel'), gpanel = $('gpanel');
 let chatId = null, ctl = null;
 
 // Any 401 from the server means there is no valid session (never logged in, or the cookie expired): show the login form.
@@ -258,7 +262,7 @@ function el(tag, props = {}, ...kids) {
 async function api(method, url, body) {
   const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : 'error ' + r.status);
+  if (!r.ok) { const e = new Error(typeof j.detail === 'string' ? j.detail : 'error ' + r.status); e.status = r.status; throw e; }
   return j;
 }
 
@@ -427,11 +431,11 @@ async function runCheck(repo) {
   try { lastCheck = await api('GET', '/api/hf/quants?repo=' + encodeURIComponent(repo)); renderQuants(lastCheck); }
   catch (e) { lastCheck = null; $('mres').textContent = ''; flash(e.message); }
 }
-for (const ex of EXAMPLES) $('chips').append(el('span', { class: 'chip', textContent: ex, onclick: () => { $('repo').value = ex; runCheck(ex); } }));
+for (const ex of EXAMPLES) $('chips').append(el('button', { class: 'chip', type: 'button', textContent: ex, onclick: () => { $('repo').value = ex; runCheck(ex); } }));
 $('check').onclick = () => runCheck($('repo').value);
 $('repo').onkeydown = e => { if (e.key === 'Enter') runCheck(e.target.value); };
 $('models').onclick = () => {
-  panel.hidden = true; vpanel.hidden = true; mpanel.hidden = !mpanel.hidden;
+  panel.hidden = true; vpanel.hidden = true; gpanel.hidden = true; mpanel.hidden = !mpanel.hidden;
   if (!mpanel.hidden) { refreshHw(); refreshModels(); renderInstalled(); refreshSd(); } else { clearTimeout(pollTimer); clearTimeout(sdTimer); }
 };
 
@@ -476,7 +480,7 @@ async function resync(id, text) {
     if (ctl) return;  // the user already started something else
     const r = await fetch('/api/chats/' + id).catch(() => null);
     if (!r || !r.ok) continue;
-    if ((await r.json()).messages.some(m => m.pending)) { if (box.value === text) box.value = ''; await openChat(id); return; }
+    if ((await r.json()).messages.some(m => m.pending || m.in_progress)) { if (box.value === text) box.value = ''; await openChat(id); return; }
   }
 }
 
@@ -489,11 +493,11 @@ async function watchPending(id) {
     if (chatId !== id) { if (watching === id) watching = null; return; }
     const r = await fetch('/api/chats/' + id).catch(() => null);
     if (r && r.status === 404) { watching = null; return; }
-    if (r && r.ok && !(await r.json()).messages.some(m => m.pending)) { watching = null; await openChat(id); return; }
+    if (r && r.ok && !(await r.json()).messages.some(m => m.pending || m.in_progress)) { watching = null; await openChat(id); return; }
   }
 }
 
-function newChat() { chatId = null; history.replaceState(null, '', location.pathname); log.innerHTML = ''; panel.hidden = true; mpanel.hidden = true; vpanel.hidden = true; }
+function newChat() { chatId = null; history.replaceState(null, '', location.pathname); log.innerHTML = ''; panel.hidden = true; mpanel.hidden = true; vpanel.hidden = true; gpanel.hidden = true; }
 
 async function openChat(id) {
   const r = await fetch('/api/chats/' + id);
@@ -502,29 +506,63 @@ async function openChat(id) {
   log.innerHTML = ''; chatId = c.id; history.replaceState(null, '', '#' + c.id);
   for (const m of c.messages) {
     const b = bubble(m.role);
-    b.set(m.pending ? (m.content ? m.content + '\n' : '') + '⏳ generating the ' + (m.pending.tool === 'generate_video' ? 'video' : 'image') + '… it will appear here when it is done' : m.content);
+    b.set(m.in_progress ? (m.content ? m.content + '\n' : '') + '⏳ reply in progress…' :
+          m.pending ? (m.content ? m.content + '\n' : '') + '⏳ generating the ' + (m.pending.tool === 'generate_video' ? 'video' : 'image') + '… it will appear here when it is done' : m.content);
     if (m.thinking) b.think(m.thinking);
     (m.trace || []).forEach(t => b.tool(t));
     (m.media || []).forEach(x => b.media(x));
   }
   panel.hidden = true; log.scrollTop = log.scrollHeight;
-  if (c.messages.some(m => m.pending)) watchPending(c.id);
+  if (c.messages.some(m => m.pending || m.in_progress)) watchPending(c.id);
 }
 
+function renderChatRows(list, chats, nextOffset) {
+  for (const c of chats) {
+    const row = document.createElement('div'), t = document.createElement('button'), d = document.createElement('small'), x = document.createElement('button');
+    row.className = 'row'; t.className = 'plain chat-title'; t.type = 'button'; t.textContent = c.corrupt ? 'Unreadable chat file' : c.title;
+    t.disabled = !!c.corrupt;
+    d.textContent = c.updated.slice(0, 16).replace('T', ' ');
+    x.className = 'plain'; x.textContent = '✕'; x.setAttribute('aria-label', 'Delete chat: ' + c.title);
+    x.onclick = async () => {
+      try { await api('DELETE', '/api/chats/' + c.id); if (c.id === chatId) newChat(); row.remove(); }
+      catch (e) { row.after(el('small', { class: 'bad', role: 'alert', textContent: e.message })); }
+    };
+    if (c.corrupt) {
+      const backup = el('a', { href: '/api/chats/' + encodeURIComponent(c.id) + '/raw', download: c.id + '.json', textContent: 'Download original' });
+      row.append(t, backup, x);
+    } else {
+      t.onclick = () => openChat(c.id);
+      row.append(t, d, x);
+    }
+    list.append(row);
+  }
+  if (nextOffset != null) {
+    let failed;
+    const more = el('button', { class: 'plain', textContent: 'Load more chats', onclick: async () => {
+      more.disabled = true;
+      if (failed) failed.remove();
+      try { await loadChatPage(list, nextOffset); more.remove(); }
+      catch (e) { more.disabled = false; failed = el('div', { class: 'bad', role: 'alert', textContent: e.message }); list.append(failed); }
+    }});
+    list.append(more);
+  }
+}
+async function loadChatPage(list, offset) {
+  const page = await api('GET', '/api/chats?offset=' + offset);
+  renderChatRows(list, page.chats, page.next_offset);
+}
 async function showChats() {
-  mpanel.hidden = true; vpanel.hidden = true;
+  mpanel.hidden = true; vpanel.hidden = true; gpanel.hidden = true;
   if (!panel.hidden) { panel.hidden = true; return; }
   panel.textContent = '';
-  const list = await (await fetch('/api/chats')).json();
-  if (!list.length) panel.textContent = 'No saved chats yet.';
-  for (const c of list) {
-    const row = document.createElement('div'), t = document.createElement('span'), d = document.createElement('small'), x = document.createElement('button');
-    row.className = 'row'; t.textContent = c.title; d.textContent = c.updated.slice(0, 16).replace('T', ' ');
-    x.className = 'plain'; x.textContent = '✕';
-    t.onclick = () => openChat(c.id);
-    x.onclick = async () => { await fetch('/api/chats/' + c.id, { method: 'DELETE' }); if (c.id === chatId) newChat(); row.remove(); };
-    row.append(t, d, x); panel.append(row);
-  }
+  panel.append(el('div', { class: 'row' }, el('button', { class: 'plain', textContent: 'Generated media', onclick: () => showGeneratedMedia() })));
+  const list = el('div');
+  panel.append(list);
+  try {
+    const page = await api('GET', '/api/chats?offset=0');
+    if (!page.chats.length) list.append(el('div', { class: 'muted', textContent: 'No saved chats yet.' }));
+    renderChatRows(list, page.chats, page.next_offset);
+  } catch (e) { list.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })); }
   panel.append(el('div', { class: 'row' }, el('label', { htmlFor: 'theme', textContent: 'Theme' }), themeSel));
   panel.append(el('button', { class: 'plain', textContent: 'Log out', onclick: async () => { await fetch('/api/logout', { method: 'POST' }); newChat(); showLogin(); } }));
   panel.hidden = false;
@@ -534,6 +572,7 @@ async function showChats() {
 const PHASE = { queued: 'Waiting in the queue', starting: 'Starting', text: 'Encoding the prompt (CPU)', loading: 'Loading the model', sampling: 'Sampling',
                 decoding: 'Decoding the video', saving: 'Saving the video', running: 'Working' };
 let vsd = null, vform = [], vwatch = null, vsw = null;  // models list, fields of the shown model, job timer, restart timer
+let vtrackId = null, vannouncement = '';
 const vkey = () => 'buia.video.' + ($('vmodel').value || 'server');
 const vactive = () => { const m = (vsd?.models || []).find(m => m.id === $('vmodel').value); return $('vmodel').value ? !!m?.active : true; };
 const vsave = () => { try { localStorage.setItem(vkey(), JSON.stringify(vread())); } catch (e) {} };
@@ -588,6 +627,8 @@ function vshow(j) {  // one answer of the job API on screen
   if (j.percent == null) bar.removeAttribute('value'); else bar.value = j.percent;
   const q = j.phase === 'queued' && j.queue ? ' (position ' + j.queue + ')' : '';
   $('vtxt').textContent = (j.cancelling ? 'Cancelling… ' : '') + (PHASE[j.phase] || j.phase) + q + (j.steps ? ' ' + j.step + '/' + j.steps : '') + ' · ' + j.elapsed + ' s' + (j.percent != null ? ' · ' + j.percent + '%' : '');
+  const announcement = j.state === 'running' ? (j.cancelling ? 'Cancelling video.' : PHASE[j.phase] || 'Video in progress.') : `Video ${j.state}.`;
+  if (announcement !== vannouncement) { $('vannounce').textContent = announcement; vannouncement = announcement; }
   $('vcancel').dataset.id = j.id; $('vcancel').disabled = j.cancelling;
   if (j.state === 'error') $('vmsg').textContent = j.error;
   if (j.state === 'cancelled') $('vout').replaceChildren(el('div', { class: 'muted', textContent: 'Cancelled after ' + j.elapsed + ' s.' }));
@@ -598,18 +639,30 @@ function vshow(j) {  // one answer of the job API on screen
   }
 }
 function vtrack(id) {
-  clearInterval(vwatch); vbusy(true);
+  clearTimeout(vwatch); vtrackId = id; vbusy(true);
+  let failures = 0;
   const tick = async () => {
+    if (vtrackId !== id) return;
     try {
       const j = await api('GET', '/api/video/jobs/' + id);
+      failures = 0;
       vshow(j);
-      if (j.state === 'running') return;
-    } catch (e) { $('vmsg').textContent = e.message; }
-    clearInterval(vwatch); vwatch = null; vbusy(false);
+      if (j.state === 'running') { vwatch = setTimeout(tick, 1000); return; }
+      vwatch = null; vtrackId = null; vbusy(false);
+    } catch (e) {
+      $('vmsg').textContent = e.status === 404 ? 'This video job is no longer available.'
+        : e.status && e.status < 500 ? 'Video status could not be refreshed: ' + e.message
+        : 'Could not refresh video status; retrying… ' + e.message;
+      if (e.status && e.status < 500) { vwatch = null; vtrackId = null; vbusy(false); return; }
+      failures++;
+      vwatch = setTimeout(tick, Math.min(1000 * (2 ** Math.min(failures, 4)), 10000));
+    }
   };
-  vwatch = setInterval(tick, 1000); tick();
+  vwatch = setTimeout(tick, 0);
 }
 $('vgo').onclick = async () => {
+  const invalid = [$('vprompt'), ...vform.map(f => document.getElementById('vf-' + f.key))].find(x => x && !x.checkValidity());
+  if (invalid) { invalid.reportValidity(); invalid.focus(); return; }
   $('vmsg').textContent = ''; $('vout').textContent = ''; vsave();
   try { const j = await api('POST', '/api/video/jobs', { model: $('vmodel').value, values: vread() }); vshow(j); vtrack(j.id); $('vrun').scrollIntoView({ block: 'nearest' }); }  // the form is long: show the bar
   catch (e) { $('vmsg').textContent = e.message; }
@@ -619,12 +672,12 @@ $('vcancel').onclick = async () => {
   try { vshow(await api('POST', '/api/video/jobs/' + $('vcancel').dataset.id + '/cancel')); }
   catch (e) { $('vmsg').textContent = e.message; $('vcancel').disabled = false; }
 };
-$('vprompt').onchange = vsave;
+$('vprompt').oninput = vsave;
 $('vreset').onclick = () => { try { localStorage.removeItem(vkey()); } catch (e) {} vparams(true).catch(e => { $('vmsg').textContent = e.message; }); };
 $('vmodel').onchange = () => { if (!vwatch) vload().catch(e => { $('vmsg').textContent = e.message; }); };
 $('vclose').onclick = () => { vpanel.hidden = true; clearTimeout(vsw); };
 $('vopen').onclick = async () => {  // from the Models panel: the header has no room for one more button on a phone
-  panel.hidden = true; mpanel.hidden = true; vpanel.hidden = false;
+  panel.hidden = true; mpanel.hidden = true; gpanel.hidden = true; vpanel.hidden = false;
   clearTimeout(vsw);
   try {
     await vload();
@@ -632,6 +685,48 @@ $('vopen').onclick = async () => {  // from the Models panel: the header has no 
     if (last && !vwatch && last.state !== 'error' && (last.state === 'running' || !$('vout').hasChildNodes())) { vshow(last); if (last.state === 'running') vtrack(last.id); }
   } catch (e) { $('vmsg').textContent = e.message; }
 };
+
+async function showGeneratedMedia(offset = 0, reset = true) {
+  panel.hidden = true; mpanel.hidden = true; vpanel.hidden = true; gpanel.hidden = false;
+  if (reset) gpanel.textContent = '';
+  if (reset) gpanel.append(el('div', { class: 'row' }, el('button', { class: 'plain', textContent: 'Back to chats', onclick: showChats })), el('h3', { textContent: 'Generated media' }));
+  try {
+    const page = await api('GET', '/api/media?offset=' + offset);
+    if (reset && !page.media.length) gpanel.append(el('div', { class: 'muted', textContent: 'No generated files yet.' }));
+    for (const item of page.media) {
+      const card = el('div', { class: 'q' });
+      card.append(item.kind === 'webm'
+        ? el('video', { src: item.url, controls: true, preload: 'metadata', className: 'media' })
+        : el('img', { src: item.url, alt: 'Generated image', loading: 'lazy', className: 'media' }));
+      const row = el('div', { class: 'row' }, el('a', { href: item.url, download: item.name, textContent: item.name }), el('small', { textContent: Math.ceil(item.size / 1024) + ' KB' }));
+      const remove = el('button', { class: 'plain', textContent: 'Delete', disabled: !item.deletable,
+        title: item.referenced ? 'This file is used by a saved chat' : item.deletable ? 'Delete generated file' : 'Cannot verify references while a chat file is unreadable',
+        onclick: async () => {
+          if (!confirm('Delete generated file ' + item.name + '?')) return;
+          try { await api('DELETE', '/api/media/' + encodeURIComponent(item.name)); showGeneratedMedia(0, true); }
+          catch (e) { card.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })); }
+        }});
+      row.append(remove);
+      card.append(row);
+      if (item.referenced) card.append(el('div', { class: 'muted', textContent: 'Referenced by a saved chat; delete that chat before deleting this file.' }));
+      gpanel.append(card);
+    }
+    if (page.next_offset != null) {
+      const more = el('button', { class: 'plain', textContent: 'Load more files' });
+      more.onclick = async () => {
+        more.disabled = true;
+        more.textContent = 'Loading…';
+        if (await showGeneratedMedia(page.next_offset, false)) more.remove();
+        else { more.disabled = false; more.textContent = 'Load more files'; }
+      };
+      gpanel.append(more);
+    }
+    return true;
+  } catch (e) {
+    gpanel.append(el('div', { class: 'bad', role: 'alert', textContent: e.message }));
+    return false;
+  }
+}
 
 $('f').onsubmit = e => { e.preventDefault(); const t = box.value.trim(); if (!t || ctl) return; box.value = ''; ask(t); };
 box.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('f').requestSubmit(); };

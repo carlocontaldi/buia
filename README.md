@@ -9,10 +9,12 @@
 >
 > **BUIA**: *Bottega Unipersonale d'Intelligenza Artificiale*, a one-person AI workshop.
 
----
+<br>
 
 A local standalone personal assistant: llama.cpp (router mode, CUDA) plus a small FastAPI agent and a web UI.
 It generates text, images and videos, reads and writes your notes through file tools, searches the web and reads pages, remembers things in `BUIA.md`, streams replies, keeps chat history as JSON files, and can be reached from your phone over Tailscale.
+
+<br>
 
 <p1 align="center">
   <img src="assets/buia-banner.png" alt="" width="1280"><br>
@@ -59,7 +61,7 @@ Then open http://127.0.0.1:8000 and log in with the password the installer print
 - **Video dashboard** (button in Models, under the image and video presets) makes videos from a form with a progress bar, see [Video dashboard](#video-dashboard).
 - **Think** lets the model reason before it answers (slower, uses more context). Off by default; the choice is kept per browser.
 - **Theme** (the selector in the header): Plain, Light, Dark, Sepia, BUIA. Plain is the default and follows your operating system's light or dark setting; the choice is kept per browser.
-- **Chats** lists the chats saved as JSON files in `chats\` inside your buia folder. Generated images and videos stay in their chat.
+- **Chats** lists the chats saved as JSON files in `chats\` inside your buia folder. The list is paged; an unreadable chat can be downloaded for recovery. **Generated media** opens the saved image/video gallery. Files referenced by chats cannot be deleted until those chats are removed.
 
 ## Update
 
@@ -216,8 +218,9 @@ python -m unittest discover -s tests -v
 
 The API tests require FastAPI and HTTPX; install the locked agent requirements before running discovery so dependency-based skips do not hide
 missing coverage. GitHub Actions runs the suite on Linux and Windows; `test_sd_run.py` exercises the Linux container supervisor and is skipped
-on Windows. In the agent container, only `test_sd_job.py` can be run from a copied `tests` directory because other tests locate source files
-relative to the repository layout.
+on Windows. Compose reports agent readiness through `/api/health`, which returns HTTP 503 until llama-server is ready. Installer and updater
+wait up to two minutes and fail with recent service logs if readiness is not reached. In the agent container, only `test_sd_job.py` can be
+run from a copied `tests` directory because other tests locate source files relative to the repository layout.
 
 ## Updating dependencies
 

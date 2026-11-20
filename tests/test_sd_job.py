@@ -1,10 +1,11 @@
 """Tests for how agent/agent.py's _sd_job reads a finished image or video job (a fake sd-server / cogvideo service answers).
 
-They need the agent's own dependencies (fastapi, httpx), so they are skipped where those are missing. Either install them and run from
-the repo root:  python -m unittest discover -s tests
-or run them inside the agent container, where agent.py is in the working directory:
+They need the agent's own dependencies (fastapi, httpx), so they are skipped where those are missing. Run the full suite from the repo root:
+  python -m unittest discover -s tests
+The _sd_job tests can also run inside the agent container, where agent.py is in the working directory. Other tests load source files relative to
+the repo layout and should be run from a checkout:
   docker compose cp tests agent:/tmp/tests
-  docker compose exec agent python -m unittest discover -s /tmp/tests
+  docker compose exec agent python -m unittest discover -s /tmp/tests -p test_sd_job.py
 """
 import atexit
 import base64
