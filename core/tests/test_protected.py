@@ -1,7 +1,7 @@
 """safe() refuses the repo's own entries at the top of workspace/ (.git, templates/, README.md), the stack folder and .obsidian/.
 
 The buia folder is both the repo root and the workspace, so these are reachable by the file tools unless protected() covers them.
-Like the other agent tests this needs fastapi and httpx (skipped without them). From buia-core:  python -m unittest discover -s tests
+Like the other agent tests this needs fastapi and httpx (skipped without them). From core:  python -m unittest discover -s tests
 """
 import atexit
 import os

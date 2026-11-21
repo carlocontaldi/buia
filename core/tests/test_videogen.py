@@ -1,6 +1,6 @@
 """Tests for agent/videogen.py: the parameters of each video engine, how a form becomes a job body, and how progress is read (standard library only).
 
-Run from buia-core:  python -m unittest discover -s tests
+Run from core:  python -m unittest discover -s tests
 """
 import sys
 import tempfile

@@ -1,6 +1,6 @@
 """Tests for cogvideo/server.py (standard library only, no GPU: generate.py is replaced by a fake).
 
-Run from buia-core:  python -m unittest discover -s tests
+Run from core:  python -m unittest discover -s tests
 """
 import importlib.util
 import json

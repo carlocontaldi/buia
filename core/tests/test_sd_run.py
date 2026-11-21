@@ -2,7 +2,7 @@
 makes the script restart the server. They need a POSIX sh and GNU stat (Linux, as in the sd containers); sdmodels needs fastapi and httpx.
 The script polls every 2 s, so each test takes a few seconds.
 
-Run from buia-core:  python -m unittest discover -s tests
+Run from core:  python -m unittest discover -s tests
 """
 import os
 import shutil
