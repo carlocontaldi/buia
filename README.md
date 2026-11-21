@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="agent/static/buia-logo.png" alt="" width="120"><br>
+  <img src="buia-core/agent/static/buia-logo.png" alt="" width="120"><br>
   BUIA
 </h1>
 
@@ -38,19 +38,20 @@ It generates text, images and videos, reads and writes your notes through file t
 ## Install
 
 ```powershell
-mkdir $HOME\buia -Force; cd $HOME\buia
-git clone https://github.com/carlocontaldi/buia.git buia-core
-cd buia-core
+git clone https://github.com/carlocontaldi/buia.git $HOME\buia
+cd $HOME\buia
 .\install.cmd              # add -Tailscale to expose it to your tailnet, -Sd for image/video generation, -CogVideo for the CogVideoX video model
 ```
 
-`install.ps1` checks Docker and GPU access, creates `.env` from `.env.example` (with `BUIA_PATH` set to the folder
-above the repo), creates `BUIA.md` from `templates/BUIA.md` if it does not exist, builds and starts the core,
-and waits until it answers. It never overwrites an existing `.env` or `BUIA.md`.
+The buia folder is the repository. `install.cmd` runs `buia-core\install.ps1`, which checks Docker and GPU access, creates `buia-core\.env` from `.env.example`
+(with `BUIA_PATH` set to the buia folder, the one above `buia-core`), creates `BUIA.md` from `templates/BUIA.md` if it does not exist,
+builds and starts the core, and waits until it answers. It never overwrites an existing `.env` or `BUIA.md`.
 
-Keep the clone directly inside your buia folder (any name): it sits in the folder the agent can read and write, and the agent's
-file tools refuse it (they recognise it by `install.ps1` and `docker-compose.yml`) because it holds `.env` and the scripts you run.
-They also refuse `.obsidian/` (plugins there are code Obsidian runs), and the `vault/` mount is read-only. The agent's notes live in `memory/`.
+The buia folder is also the folder the agent can read and write (`BUIA_PATH`). `buia-core\` holds `.env` and the scripts you run, so the agent's
+file tools refuse it (they recognise it by `install.ps1` and `docker-compose.yml`): keep `.env` there, not next to `BUIA.md`.
+They also refuse `.git`, `templates/` and `README.md` at the top of the buia folder (they belong to the repo) and `.obsidian/` (plugins there are code Obsidian runs), and the `vault/` mount is read-only. The agent's notes live in `memory/`.
+
+Run the `docker compose` commands in this README, and the test and lock-file commands at the end, in `buia-core\`: that is where `docker-compose.yml` and `.env` are.
 
 Then open http://127.0.0.1:8000 and log in with the password the installer printed (it is saved in `.env` as `BUIA_PASSWORD`; edit it there and run
 `docker compose up -d` to change it). Click **Models**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
@@ -66,7 +67,7 @@ Then open http://127.0.0.1:8000 and log in with the password the installer print
 ## Update
 
 ```powershell
-cd $HOME\buia\buia-core
+cd $HOME\buia
 .\update.cmd               # git pull + rebuild + restart
 .\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
 ```
@@ -82,9 +83,9 @@ is protected by one shared password only, and it can write notes. Everyone on yo
 
 ## What lives where
 
-| In the repo | Outside the repo (never committed) |
+| In git | Not in git (git-ignored or kept elsewhere, never committed) |
 |---|---|
-| `agent/` code and web UI, `docker-compose.yml`, scripts, `templates/BUIA.md` | `.env` (paths, token, password), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
+| `buia-core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `install.cmd`, `update.cmd` | `buia-core/.env` (paths, token, password), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
 
 ## Settings
 
@@ -110,7 +111,7 @@ The `searxng` image is the moving `latest` tag, unlike the llama image. To freez
 
 ## Image and video generation (optional)
 
-`.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\`,
+`.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\` (both in `buia-core\`),
 and builds the `sd` service from `docker-compose.yml`. The first build compiles it for CUDA and takes a while.
 
 1. Open **Models**, scroll to **Image and video models**, click **Download** on a preset (Z-Image Turbo for images, Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video),
@@ -133,7 +134,7 @@ and builds the `sd` service from `docker-compose.yml`. The first build compiles 
 3. Ask the assistant for an image or a video. Before each job the chat model is unloaded to free VRAM and loads again on your next message.
    Results are saved in `generated\` inside your workspace folder and shown inline in the chat.
 
-`tools\sd_smoke.py` runs one small video job against the sd server to check it end to end (instructions at the top of the file).
+`tools\sd_smoke.py` runs one small video job against the sd server to check it end to end and saves it in `generated\` (instructions at the top of the file).
 `.\update.cmd` rebuilds the sd service too once `sdcpp\` exists.
 
 A generation keeps running if you close the page, the phone sleeps or you press Stop; the result is added to the chat when it is done
@@ -148,7 +149,7 @@ button; the video server restarts and the form waits for it), write the prompt a
 - The form is made from the parameters of the model you picked. **Wan 2.1 / 2.2** (and any model `sd-video` runs): negative prompt, width, height, frames, frames per
   second, steps, cfg scale, sampler, flow shift, seed. Three of them are optional (cfg scale, sampler, flow shift): left empty they keep the flags the model was
   started with, which show as the grey hint. **CogVideoX**: negative prompt, steps (10-50), guidance scale (1-20, default 6) and seed; its 720x480x49 format is fixed.
-  Size, frames and steps stop at the limits `generate_video` uses (`VIDEO_MAX_*` in `agent/agent.py`). Seed -1 picks a random one; the one used is shown next to the video.
+  Size, frames and steps stop at the limits `generate_video` uses (`VIDEO_MAX_*` in `buia-core/agent/agent.py`). Seed -1 picks a random one; the one used is shown next to the video.
   The values are remembered per model in your browser; **Reset parameters** puts the defaults back.
 - The progress bar goes through the phases (waiting, loading, sampling, decoding) and the text beside it gives the exact step: `Sampling 7/10 · 41 s`. The bar is one scale for
   all phases, so its sections are a layout, not shares of the time. CogVideoX reports its steps in the job; stable-diffusion.cpp's job answer has no progress, only its
@@ -161,7 +162,7 @@ button; the video server restarts and the form waits for it), write the prompt a
 
 ### CogVideoX 2B (optional second video engine)
 
-stable-diffusion.cpp cannot run CogVideoX, so `.\install.cmd -CogVideo` builds a separate `cogvideo` service (`cogvideo/`: Hugging Face Diffusers on
+stable-diffusion.cpp cannot run CogVideoX, so `.\install.cmd -CogVideo` builds a separate `cogvideo` service (`buia-core/cogvideo/`: Hugging Face Diffusers on
 PyTorch with CUDA; the image is several GB and the first build takes a while). It sets `COGVIDEO=on` in `.env`, which makes `update.cmd` rebuild it too.
 It does not need `-Sd`. Then, in **Models**:
 
@@ -174,9 +175,9 @@ It does not need `-Sd`. Then, in **Models**:
    3.4 GB transformer and the VAE take turns on the GPU. It therefore needs about 12 GB of free RAM inside Docker Desktop's WSL2 VM, which by default gets half of your RAM
    (and the other containers share it). If a job ends with "killed: probably out of memory", raise `memory=` in `%UserProfile%\.wslconfig` (`[wsl2]` section) and run `wsl --shutdown`.
 4. **Measured on the 8 GB laptop:** about 200-250 s per video at 10 steps (720x480, 49 frames); peak VRAM and RAM not yet recorded (the timeout is 1 hour). Check it once with
-   `docker compose cp .\tools\sd_smoke.py agent:/tmp/sd_smoke.py` and
+   `docker compose cp ..\tools\sd_smoke.py agent:/tmp/sd_smoke.py` and
    `docker compose exec -T -e SD_URL=http://cogvideo:1234 agent python /tmp/sd_smoke.py 720 480 49 10`, while
-   `docker compose logs -f cogvideo` shows `step i/N`. If it is too slow, give the assistant fewer steps or lower the default (`COG_DEFAULT_STEPS` in `agent/agent.py`).
+   `docker compose logs -f cogvideo` shows `step i/N`. If it is too slow, give the assistant fewer steps or lower the default (`COG_DEFAULT_STEPS` in `buia-core/agent/agent.py`).
 
 ## Security
 
@@ -209,7 +210,7 @@ Keep those off for the folders the agent writes to.
 
 ## Running tests
 
-Use Python 3.12, install the same hash-pinned dependencies as the agent, and run the suite from the repository root:
+Use Python 3.12, install the same hash-pinned dependencies as the agent, and run the suite from `buia-core\`:
 
 ```powershell
 python -m pip install --require-hashes -r agent/requirements.txt
