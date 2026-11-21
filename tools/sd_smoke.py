@@ -1,9 +1,12 @@
 r"""First small video job against sd-server (native sdcpp API). Run it inside the agent container (PowerShell, from the buia-core folder):
     docker compose cp ..\tools\sd_smoke.py agent:/tmp/sd_smoke.py
     docker compose exec -T agent python /tmp/sd_smoke.py 256 256 9 10      # width height frames steps
-Saves /data/workspace/generated/sd_smoke.<format>  (= generated\sd_smoke.<format> in your buia folder on Windows).
+Saves /data/workspace/generated/<YYYYMMDD-HHMMSS>-sd-smoke-<hex>.<format>  (= generated\ in your buia folder on Windows), named like the
+assistant's own videos so that the Generated media panel lists it.
 Request fields follow examples/server/api.md at master-920-2f88688; omitted fields keep the server defaults."""
-import base64, os, sys, time
+import base64, os, secrets, sys, time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -28,7 +31,7 @@ while time.time() - t0 < 1800:
         print(f"[{time.time() - t0:6.1f}s] {last}")
     if last == "completed":
         res = j["result"]
-        path = f"{OUT}/sd_smoke.{res['output_format']}"
+        path = f"{OUT}/{datetime.now(ZoneInfo(os.getenv('TZ', 'UTC'))).strftime('%Y%m%d-%H%M%S')}-sd-smoke-{secrets.token_hex(8)}.{res['output_format']}"
         if "result_url" in res:  # cogvideo serves the video from its own URL on the same service (like the agent)
             url = res["result_url"]
             if not url.startswith("/"):
