@@ -49,7 +49,7 @@ builds and starts the core, and waits until it answers. It never overwrites an e
 
 The buia folder is also the folder the agent can read and write (`BUIA_PATH`). `buia-core\` holds `.env` and the scripts you run, so the agent's
 file tools refuse it (they recognise it by `install.ps1` and `docker-compose.yml`): keep `.env` there, not next to `BUIA.md`.
-They also refuse `.obsidian/` (plugins there are code Obsidian runs), and the `vault/` mount is read-only. The agent's notes live in `memory/`.
+They also refuse `.git`, `templates/` and `README.md` at the top of the buia folder (they belong to the repo) and `.obsidian/` (plugins there are code Obsidian runs), and the `vault/` mount is read-only. The agent's notes live in `memory/`.
 
 Run the `docker compose` commands in this README, and the test and lock-file commands at the end, in `buia-core\`: that is where `docker-compose.yml` and `.env` are.
 
