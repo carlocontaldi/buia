@@ -33,6 +33,7 @@ It generates text, images and videos, reads and writes your notes through file t
 - Windows 11, Docker Desktop (WSL2 backend) with NVIDIA GPU support
 - NVIDIA driver recent enough for CUDA 13 (the compose file uses `server-cuda13`, pinned by digest to a known working build; for an older driver use `server-cuda` and drop the digest)
 - Git. Tailscale if you want phone access.
+- For image and video generation (`-Sd`): the sd image is built for compute capability 12.0 (RTX 50 series, CUDA 12.8). For another GPU, set `CUDA_ARCHITECTURES` under `sd` in `core\docker-compose.yml` (`nvidia-smi --query-gpu=compute_cap --format=csv,noheader` prints it; drop the dot, 8.9 is `89`) and run `.\update.cmd`. The chat models and the CogVideoX service are not tied to that value.
 - Developed and measured on one machine: RTX 5050 Laptop GPU (8 GB VRAM), 32 GB RAM. The image and video presets assume that size.
 
 ## Install
