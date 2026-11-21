@@ -94,7 +94,7 @@ def protected(p: Path) -> bool:
     - any clone of this repo, whatever it is called: it holds .env (HF token) and the scripts you run. A clone is recognised by
       its install.ps1 and docker-compose.yml, so a renamed folder is still covered;
     - .git, templates/ and README.md at the top of workspace/ (REPO_ENTRIES): the workspace is the repo root, so they are the repo's.
-    A Windows bind mount treats .OBSIDIAN and .obsidian (or BUIA-REPO and buia-repo) as one folder while resolve() does not,
+    A Windows bind mount treats .OBSIDIAN and .obsidian (or MEMORY and memory) as one folder while resolve() does not,
     hence the case-insensitive name test and the file test, which the mount answers for any spelling."""
     for r in ROOTS:
         if p.is_relative_to(r):
