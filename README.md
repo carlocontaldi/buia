@@ -209,7 +209,7 @@ python -m unittest discover -s tests -v
 The API tests need FastAPI and HTTPX, so install the locked agent requirements first: otherwise those tests are skipped and hide missing coverage.
 No CI workflow is tracked in the repo, so run the suite yourself. `test_sd_run.py` exercises the Linux container supervisor and is skipped on Windows.
 In the agent container only `test_sd_job.py` can run from a copied `tests` directory, because the other tests locate source files relative to the repository layout.
-Compose reports agent readiness through `/api/health` (HTTP 503 until llama-server is ready); the installer and updater wait up to two minutes and fail with recent service logs if it is not reached.
+Compose reports agent readiness through `/api/health` (HTTP 503 until llama-server is ready); the installer and updater wait up to two minutes and, if it is not reached, warn and print the service status and recent logs.
 
 ## Updating dependencies
 
