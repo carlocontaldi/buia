@@ -74,6 +74,7 @@ cd $HOME\buia
 .\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
 ```
 
+The release number is in `core/agent/VERSION` and in the answer of `http://127.0.0.1:8000/api/health`; give it when you report a problem.
 The first update that brings the login adds a random `BUIA_PASSWORD` to your `.env` and prints it. If the login page says it is not set, you updated with an older `update.ps1`: run `.\update.cmd` once more.
 
 ## Phone (Tailscale)

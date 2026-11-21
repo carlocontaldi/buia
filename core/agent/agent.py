@@ -39,6 +39,10 @@ LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
 DATA = Path(os.getenv("DATA_DIR", "/data")).resolve()
 ROOTS = [(DATA / "buia").resolve(), (DATA / "vault").resolve()]
 MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md").split(",") if p.strip()]
+try:
+    VERSION = (Path(__file__).with_name("VERSION")).read_text(encoding="utf-8").strip()  # the release number, also the git tag (v0.1.0)
+except OSError:
+    VERSION = "unknown"
 MEMORY_MAX_CHARS = int(os.getenv("MEMORY_MAX_CHARS", "12000"))  # ~3k tokens of always-loaded memory
 MAX_STEPS = int(os.getenv("MAX_STEPS", "8"))  # tool-call rounds per user message
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))  # chat messages kept per request
@@ -1120,7 +1124,7 @@ def health():
         ready = httpx.get(f"{LLAMA_URL}/health", timeout=3).status_code == 200
     except httpx.HTTPError:
         ready = False
-    return JSONResponse({"ready": ready}, status_code=200 if ready else 503)
+    return JSONResponse({"ready": ready, "version": VERSION}, status_code=200 if ready else 503)
 
 
 @app.get("/api/chats")

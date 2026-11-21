@@ -72,6 +72,15 @@ class ProtectedTests(unittest.TestCase):
             self.assertEqual(agent.safe(rel), (agent.DATA / rel).resolve(), rel)
 
 
+class VersionTests(unittest.TestCase):
+    def test_the_version_file_holds_one_release_number(self):
+        self.assertRegex(agent.VERSION, r"^\d+\.\d+\.\d+$")
+        self.assertEqual(agent.VERSION, (AGENT_DIR / "VERSION").read_text(encoding="utf-8").strip())
+
+    def test_the_image_copies_the_version_file(self):
+        self.assertIn("VERSION", (AGENT_DIR / "Dockerfile").read_text(encoding="utf-8"))
+
+
 class MemoryPatternTests(unittest.TestCase):
     def test_the_defaults_name_buia(self):
         self.assertEqual(agent.MEMORY_FILES, ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/Projects/*.md"])

@@ -446,12 +446,12 @@ class VideoApiTests(unittest.TestCase):
     def test_health_reports_not_ready_as_unhealthy(self):
         with patch.object(agent.httpx, "get", side_effect=httpx.ConnectError("offline")):
             response = self.client.get("/api/health")
-        self.assertEqual((response.status_code, response.json()), (503, {"ready": False}))
+        self.assertEqual((response.status_code, response.json()), (503, {"ready": False, "version": agent.VERSION}))
 
     def test_health_reports_ready_as_healthy(self):
         with patch.object(agent.httpx, "get", return_value=httpx.Response(200)):
             response = self.client.get("/api/health")
-        self.assertEqual((response.status_code, response.json()), (200, {"ready": True}))
+        self.assertEqual((response.status_code, response.json()), (200, {"ready": True, "version": agent.VERSION}))
 
     def test_chat_rejects_a_prompt_that_cannot_fit_context(self):
         oversized = "x" * (agent.PROMPT_BUDGET + 1)
