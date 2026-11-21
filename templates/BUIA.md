@@ -51,10 +51,6 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 - For non-trivial tasks: understand the request → inspect relevant code and context → state assumptions and constraints → make the smallest correct change → verify results → report what changed and what was verified. For multi-step tasks, state a brief plan: `[step] → verify: [check]` for each step.
 - A task is complete only when the requested change is implemented, the result is verified as much as possible, assumptions and limitations are disclosed, and no unrelated behavior was unintentionally changed.
 
-#### Optimization guidelines
-
-- When spawning an agent (including from a skill), leave `model` unset. Override it with the standard model (currently Sonnet) only if the agent is expected to run on Opus or Fable.
-
 ### Core Priorities
 
 Priority order matters. When rules conflict, follow the higher priority item: Correctness > Verification > Minimal Changes > Clarity > Maintainability.
@@ -73,5 +69,3 @@ Priority order matters. When rules conflict, follow the higher priority item: Co
 
 ## Memory
 Keep this section LAST: the assistant appends new lines at the end of this file.
-
-User is able to speak to me via Tailscale on their smartphone.
