@@ -461,25 +461,25 @@ class VideoApiTests(unittest.TestCase):
     def test_file_tools_page_list_and_search_txt_and_overwrite_atomically(self):
         with tempfile.TemporaryDirectory() as data:
             data_path = Path(data)
-            workspace, vault = data_path / "workspace", data_path / "vault"
-            workspace.mkdir(); vault.mkdir()
+            buia_dir, vault = data_path / "buia", data_path / "vault"
+            buia_dir.mkdir(); vault.mkdir()
             for i in range(5):
-                (workspace / f"note-{i}.txt").write_text(f"needle {i}", encoding="utf-8")
-            with patch.object(agent, "DATA", data_path), patch.object(agent, "ROOTS", [workspace, vault]):
-                self.assertIn("offset=2", agent.list_dir("workspace", limit=2))
-                results = agent.search_files("needle", "workspace", limit=2)
+                (buia_dir / f"note-{i}.txt").write_text(f"needle {i}", encoding="utf-8")
+            with patch.object(agent, "DATA", data_path), patch.object(agent, "ROOTS", [buia_dir, vault]):
+                self.assertIn("offset=2", agent.list_dir("buia", limit=2))
+                results = agent.search_files("needle", "buia", limit=2)
                 self.assertIn("note-0.txt", results)
                 self.assertIn("offset=2", results)
-                past_the_end = agent.search_files("needle", "workspace", offset=9)
+                past_the_end = agent.search_files("needle", "buia", offset=9)
                 self.assertIn("5 in total", past_the_end)
                 self.assertNotIn("showing", past_the_end)
-                self.assertEqual(agent.search_files("absent", "workspace"), "no matches")
-                target = workspace / "note-0.txt"
+                self.assertEqual(agent.search_files("absent", "buia"), "no matches")
+                target = buia_dir / "note-0.txt"
                 with patch.object(agent.os, "replace", side_effect=OSError("replace failed")):
                     with self.assertRaisesRegex(OSError, "replace failed"):
-                        agent.write_file("workspace/note-0.txt", "replacement", overwrite=True)
+                        agent.write_file("buia/note-0.txt", "replacement", overwrite=True)
                 self.assertEqual(target.read_text(encoding="utf-8"), "needle 0")
-                self.assertEqual(list(workspace.glob("*.tmp")), [])
+                self.assertEqual(list(buia_dir.glob("*.tmp")), [])
 
     def post_chat_with_sse(self, body):
         real_async_client = httpx.AsyncClient

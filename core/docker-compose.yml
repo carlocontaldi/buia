@@ -54,7 +54,7 @@ services:
       KV_CACHE_TYPE: ${KV_CACHE_TYPE:-q8_0}
       HF_TOKEN: ${HF_TOKEN:-}
       GPU_VRAM_MB: ${GPU_VRAM_MB:-}    # optional manual VRAM size if nvidia-smi is not visible in this container
-      MEMORY_FILES: ${MEMORY_FILES:-workspace/BUIA.md,workspace/memory/*.md,workspace/memory/Projects/*.md}
+      MEMORY_FILES: ${MEMORY_FILES:-buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md}
       MEMORY_MAX_CHARS: ${MEMORY_MAX_CHARS:-12000}   # size of the always-loaded memory (agent/agent.py)
       MAX_STEPS: ${MAX_STEPS:-8}                   # tool-call rounds per user message
       MAX_HISTORY: ${MAX_HISTORY:-20}               # chat messages sent to the model per request
@@ -76,14 +76,14 @@ services:
     volumes:
       - type: bind
         source: ${BUIA_PATH:?BUIA_PATH is empty - install.ps1 sets it in .env, see .env.example}
-        target: /data/workspace
+        target: /data/buia
       - type: bind
         source: ${VAULT_PATH:?VAULT_PATH is empty - install.ps1 sets it in .env, see .env.example}
         target: /data/vault
         read_only: true                 # the agent can read the vault but never change it
       - type: bind
         source: ./sdmodels              # image/video model files: the Models panel downloads them here (sd and sd-video mount the same folder read-only)
-        target: /data/sdmodels          # outside the workspace and the vault, so the model's file tools cannot reach it
+        target: /data/sdmodels          # outside the buia folder and the vault, so the model's file tools cannot reach it
         bind:
           create_host_path: true
       - type: volume

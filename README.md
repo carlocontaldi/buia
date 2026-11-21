@@ -126,7 +126,7 @@ The `searxng` image is the moving `latest` tag, unlike the llama image; to freez
      `docker compose --profile sd up -d`. They apply while no model has been chosen with Use.
 2. The sd server runs one model at a time (an image model cannot make videos and the other way round), hence two servers.
 3. Ask the assistant for an image or a video. Before each job the chat model is unloaded to free VRAM; it loads again on your next message.
-   Results are saved in `generated\` inside your workspace folder and shown inline in the chat.
+   Results are saved in `generated\` inside your buia folder and shown inline in the chat.
 
 `tools\sd_smoke.py` runs one small video job against the sd server to check it end to end and saves it in `generated\` (instructions at the top of the file).
 `.\update.cmd` rebuilds the sd service too once `sdcpp\` exists.

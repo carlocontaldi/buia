@@ -1,7 +1,7 @@
 r"""First small video job against sd-server (native sdcpp API). Run it inside the agent container (PowerShell, from the core folder):
     docker compose cp ..\tools\sd_smoke.py agent:/tmp/sd_smoke.py
     docker compose exec -T agent python /tmp/sd_smoke.py 256 256 9 10      # width height frames steps
-Saves /data/workspace/generated/<YYYYMMDD-HHMMSS>-sd-smoke-<hex>.<format>  (= generated\ in your buia folder on Windows), named like the
+Saves /data/buia/generated/<YYYYMMDD-HHMMSS>-sd-smoke-<hex>.<format>  (= generated\ in your buia folder on Windows), named like the
 assistant's own videos so that the Generated media panel lists it.
 Request fields follow examples/server/api.md at master-920-2f88688; omitted fields keep the server defaults."""
 import base64, os, secrets, sys, time
@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 SD = os.environ.get("SD_URL", "http://sd:1234")
-OUT = os.environ.get("OUT_DIR", "/data/workspace/generated")
+OUT = os.environ.get("OUT_DIR", "/data/buia/generated")
 args = sys.argv[1:]
 w, h, frames, steps = (int(a) for a in args) if len(args) == 4 else (256, 256, 9, 10)
 body = {"prompt": "a red ball rolling across a wooden floor, soft light", "width": w, "height": h,

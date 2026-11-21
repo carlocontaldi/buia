@@ -30,7 +30,7 @@ KV_BPE = {"f32": 4.0, "f16": 2.0, "bf16": 2.0, "q8_0": 34 / 32, "q5_1": 24 / 32,
           "q4_1": 20 / 32, "q4_0": 18 / 32}  # bytes per KV element
 VRAM_RESERVE_MB = int(os.getenv("VRAM_RESERVE_MB", "2048"))  # what Windows & co. use while a model is loaded
 FIT_TARGET_MB = 1024  # llama-server's default --fit-target margin
-SETTINGS = Path(os.getenv("DATA_DIR", "/data")) / "workspace" / ".buia-settings.json"
+SETTINGS = Path(os.getenv("DATA_DIR", "/data")) / "buia" / ".buia-settings.json"
 MB = 1024 * 1024
 
 
@@ -369,7 +369,7 @@ async def cached(key, ttl: float, fn):
 # ---------- machine + estimate ----------
 def free_disk_mb() -> int:
     """Free space a download can use. / is the container's own disk: on Docker Desktop (WSL2) that is a virtual disk whose free space
-    says nothing about the Windows drive it grows into. The workspace is a bind mount of a Windows folder and reports that drive,
+    says nothing about the Windows drive it grows into. The buia folder is a bind mount of a Windows folder and reports that drive,
     so the smaller of the two counts."""
     free = []
     for path in ("/", SETTINGS.parent):

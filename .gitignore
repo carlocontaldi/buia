@@ -15,7 +15,7 @@ __pycache__/
 sdcpp/
 sdmodels/
 
-# runtime data BUIA writes into its workspace, which is this folder (BUIA_PATH)
+# runtime data BUIA writes into the buia folder, which is this folder (BUIA_PATH)
 /chats/
 /generated/
 /memory/
