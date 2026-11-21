@@ -83,6 +83,8 @@ WEB_PROMPT = """- Web: web_search finds pages and web_fetch reads one. Use them 
 # Names that Windows reads as something other than they say: 8.3 short names (OBSIDI~1), a trailing dot or space ("memory." is "memory"),
 # NTFS streams (name:stream) and device names (NUL, COM1). A Windows bind mount resolves them to the real file, but protected() and
 # is_memory_file() compare spellings, so such a spelling could slip past them. No note needs a name like that, so they are refused.
+# Top-level names of workspace/ that belong to the repository (the buia folder is both the repo and the workspace), compared case-insensitively.
+REPO_ENTRIES = {".git", "templates", "readme.md"}
 WINDOWS_ALIASES = re.compile(r'[<>:"|?*]|[. ]$|~\d+(\.|$)|^(con|prn|aux|nul|com\d|lpt\d|conin\$|conout\$)(\.|$)', re.I)
 
 
@@ -90,7 +92,8 @@ def protected(p: Path) -> bool:
     """True for everything inside a protected top-level folder of either root:
     - .obsidian: plugins/ and community-plugins.json there are code that Obsidian runs on your PC;
     - any clone of this repo, whatever it is called: it holds .env (HF token) and the scripts you run. A clone is recognised by
-      its install.ps1 and docker-compose.yml, so a renamed folder is still covered.
+      its install.ps1 and docker-compose.yml, so a renamed folder is still covered;
+    - .git, templates/ and README.md at the top of workspace/ (REPO_ENTRIES): the workspace is the repo root, so they are the repo's.
     A Windows bind mount treats .OBSIDIAN and .obsidian (or BUIA-REPO and buia-repo) as one folder while resolve() does not,
     hence the case-insensitive name test and the file test, which the mount answers for any spelling."""
     for r in ROOTS:
@@ -99,6 +102,8 @@ def protected(p: Path) -> bool:
             if parts:
                 top = r / parts[0]
                 if parts[0].casefold() == ".obsidian" or ((top / "install.ps1").exists() and (top / "docker-compose.yml").exists()):
+                    return True
+                if r == ROOTS[0] and parts[0].casefold() in REPO_ENTRIES:
                     return True
     return False
 
@@ -114,7 +119,7 @@ def safe(rel: str) -> Path:
                 if WINDOWS_ALIASES.search(part):
                     raise ValueError(f"{part!r} is not a usable name here (Windows would treat it as a different file or folder)")
     if protected(p):
-        raise ValueError("that folder is protected (a clone of this repo holds .env and the install scripts, .obsidian/ holds Obsidian plugins)")
+        raise ValueError("that path is protected (a clone of this repo holds .env and the install scripts, .obsidian/ holds Obsidian plugins, .git, templates/ and README.md at the top of workspace/ belong to the repo)")
     return p
 
 
