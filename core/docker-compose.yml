@@ -75,10 +75,10 @@ services:
       - "127.0.0.1:8000:8000"         # loopback only; Tailscale Serve exposes it to your tailnet
     volumes:
       - type: bind
-        source: ${BUIA_PATH:?BUIA_PATH is empty - install.ps1 sets it in .env, see .env.example}
+        source: ${BUIA_PATH:-..}                    # default: the folder above core, i.e. your clone of this repo
         target: /data/buia
       - type: bind
-        source: ${VAULT_PATH:?VAULT_PATH is empty - install.ps1 sets it in .env, see .env.example}
+        source: ${VAULT_PATH:-${BUIA_PATH:-..}/.vault}   # default: .vault inside the buia folder
         target: /data/vault
         read_only: true                 # the agent can read the vault but never change it
       - type: bind

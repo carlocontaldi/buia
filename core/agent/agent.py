@@ -83,8 +83,9 @@ WEB_PROMPT = """- Web: web_search finds pages and web_fetch reads one. Use them 
 # Names that Windows reads as something other than they say: 8.3 short names (OBSIDI~1), a trailing dot or space ("memory." is "memory"),
 # NTFS streams (name:stream) and device names (NUL, COM1). A Windows bind mount resolves them to the real file, but protected() and
 # is_memory_file() compare spellings, so such a spelling could slip past them. No note needs a name like that, so they are refused.
-# Top-level names of buia/ that belong to the repository (the buia folder is the repo root), compared case-insensitively.
-REPO_ENTRIES = {".git", "templates", "readme.md"}
+# Top-level names of buia/ that belong to the repository (the buia folder is the repo root), plus .vault (the default vault folder:
+# read it as vault/, where it is read-only), compared case-insensitively.
+REPO_ENTRIES = {".git", "templates", "readme.md", ".vault"}
 WINDOWS_ALIASES = re.compile(r'[<>:"|?*]|[. ]$|~\d+(\.|$)|^(con|prn|aux|nul|com\d|lpt\d|conin\$|conout\$)(\.|$)', re.I)
 
 
@@ -93,7 +94,8 @@ def protected(p: Path) -> bool:
     - .obsidian: plugins/ and community-plugins.json there are code that Obsidian runs on your PC;
     - any clone of this repo, whatever it is called: it holds .env (HF token) and the scripts you run. A clone is recognised by
       its install.ps1 and docker-compose.yml, so a renamed folder is still covered;
-    - .git, templates/ and README.md at the top of buia/ (REPO_ENTRIES): buia/ is the repo root, so they are the repo's.
+    - .git, templates/ and README.md at the top of buia/ (REPO_ENTRIES): buia/ is the repo root, so they are the repo's. So is .vault/,
+      the default vault folder, which is read-only as vault/ and must not be writable here.
     A Windows bind mount treats .OBSIDIAN and .obsidian (or MEMORY and memory) as one folder while resolve() does not,
     hence the case-insensitive name test and the file test, which the mount answers for any spelling."""
     for r in ROOTS:
@@ -119,7 +121,7 @@ def safe(rel: str) -> Path:
                 if WINDOWS_ALIASES.search(part):
                     raise ValueError(f"{part!r} is not a usable name here (Windows would treat it as a different file or folder)")
     if protected(p):
-        raise ValueError("that path is protected (a clone of this repo holds .env and the install scripts, .obsidian/ holds Obsidian plugins, .git, templates/ and README.md at the top of buia/ belong to the repo)")
+        raise ValueError("that path is protected (a clone of this repo holds .env and the install scripts, .obsidian/ holds Obsidian plugins, .git, templates/ and README.md at the top of buia/ belong to the repo, .vault/ is the read-only vault: use vault/)")
     return p
 
 

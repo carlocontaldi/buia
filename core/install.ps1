@@ -31,12 +31,7 @@ if ($LASTEXITCODE -ne 0) {
 # 3. .env: created once from .env.example, never overwritten
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
-    $parent = (Resolve-Path "..").Path -replace '\\', '/'
-    (Get-Content .env) `
-        -replace '^BUIA_PATH=.*', "BUIA_PATH=$parent" `
-        -replace '^VAULT_PATH=.*', "VAULT_PATH=$parent/.obsidian" |
-        Set-Content .env -Encoding ascii
-    Write-Host "Created .env with BUIA_PATH=$parent"
+    Write-Host "Created .env"
 }
 
 # 3b. Web UI password: a random one the first time (fresh .env, or an .env from before the login existed), never overwritten
@@ -49,9 +44,12 @@ if (-not ($envLines -match '^BUIA_PASSWORD=')) {
     Write-Warning "BUIA_PASSWORD in .env is empty, so nobody can log in. Put a password after the = and run this again."
 }
 
-# 4. Folders and memory file the containers mount
-$buia  = ((Get-Content .env) | Where-Object { $_ -match '^BUIA_PATH=' }) -replace '^BUIA_PATH=', ''
-$vault = ((Get-Content .env) | Where-Object { $_ -match '^VAULT_PATH=' }) -replace '^VAULT_PATH=', ''
+# 4. Folders and memory file the containers mount. As in docker-compose.yml, BUIA_PATH defaults to the folder above core and VAULT_PATH to .vault inside it
+function Get-EnvValue($name) { (@(Get-Content .env) | Where-Object { $_ -match "^$name=\S" } | Select-Object -First 1) -replace "^$name=", '' }
+$buia = Get-EnvValue 'BUIA_PATH'
+if (-not $buia) { $buia = (Resolve-Path '..').Path }
+$vault = Get-EnvValue 'VAULT_PATH'
+if (-not $vault) { $vault = Join-Path $buia '.vault' }
 New-Item -ItemType Directory -Force -Path $buia, $vault | Out-Null
 if (-not (Test-Path "$buia/BUIA.md")) {
     Copy-Item ../templates/BUIA.md "$buia/BUIA.md"

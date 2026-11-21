@@ -58,6 +58,11 @@ class ProtectedTests(unittest.TestCase):
         for rel in ("buia/stack/.env", "buia/stack/install.ps1", "buia/.obsidian/app.json", "vault/.obsidian/app.json"):
             self.refused(rel)
 
+    def test_the_default_vault_folder_is_refused_in_buia_but_not_as_vault(self):
+        for rel in ("buia/.vault", "buia/.vault/note.md", "buia/.Vault/note.md"):
+            self.refused(rel)
+        self.assertEqual(agent.safe("vault/note.md"), (agent.DATA / "vault/note.md").resolve())
+
     def test_other_files_are_not_caught(self):
         for rel in ("buia/notes/README.md", "buia/templates.md", "buia/memory/README.md", "buia/BUIA.md"):
             self.assertEqual(agent.safe(rel), (agent.DATA / rel).resolve(), rel)

@@ -44,11 +44,12 @@ cd $HOME\buia
 ```
 
 The buia folder is the repository and the folder the agent reads and writes (`BUIA_PATH`). `install.cmd` runs `core\install.ps1`: it checks Docker and GPU access,
-creates `core\.env` from `.env.example` (`BUIA_PATH` = the buia folder, above `core`) and `BUIA.md` from `templates/BUIA.md`, builds and starts the core, and waits until it answers.
-It never overwrites an existing `.env` or `BUIA.md`.
+creates `core\.env` from `.env.example` and `BUIA.md` from `templates/BUIA.md`, builds and starts the core, and waits until it answers.
+It never overwrites an existing `.env` or `BUIA.md`. `BUIA_PATH` and `VAULT_PATH` in `.env` are optional: the buia folder defaults to the folder above `core`, the vault to `.vault\` inside it.
 
 The agent's file tools refuse `core\` (it holds `.env` and the scripts and is recognised by `install.ps1` and `docker-compose.yml`, so keep `.env` there, not next to `BUIA.md`),
-`.git`, `templates/` and `README.md` at the top of the buia folder (they belong to the repo), and `.obsidian/` (plugins there are code Obsidian runs). `vault/` is mounted read-only.
+`.git`, `templates/` and `README.md` at the top of the buia folder (they belong to the repo), `.obsidian/` (plugins there are code Obsidian runs) and `.vault/`
+(read it as `vault/`, which is mounted read-only; set `VAULT_PATH` to another folder, such as an Obsidian vault, to read that instead).
 The agent's notes live in `memory/`.
 
 Run this README's `docker compose`, test and lock-file commands in `core\`, where `docker-compose.yml` and `.env` are.
@@ -83,7 +84,7 @@ Use `serve`, never `funnel`: the agent has one shared password only and can writ
 
 | In git | Not in git (git-ignored or kept elsewhere, never committed) |
 |---|---|
-| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `install.cmd`, `update.cmd` | `core/.env` (paths, token, password), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
+| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `install.cmd`, `update.cmd` | `core/.env` (paths, token, password), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
 
 ## Settings
 
