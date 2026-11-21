@@ -1,6 +1,6 @@
 """Tests for how agent/agent.py's _sd_job reads a finished image or video job (a fake sd-server / cogvideo service answers).
 
-They need the agent's own dependencies (fastapi, httpx), so they are skipped where those are missing. Run the full suite from the repo root:
+They need the agent's own dependencies (fastapi, httpx), so they are skipped where those are missing. Run the full suite from buia-core:
   python -m unittest discover -s tests
 The _sd_job tests can also run inside the agent container, where agent.py is in the working directory. Other tests load source files relative to
 the repo layout and should be run from a checkout:
