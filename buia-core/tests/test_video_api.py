@@ -1,7 +1,7 @@
 """Tests for the Video panel's routes in agent/agent.py (/api/video/*): parameters per model, starting a job, and the progress it reports while a
 fake sd-server (progress only in its log file, as the real one) or a fake cogvideo service (progress in the job) works.
 
-Like test_sd_job.py they need fastapi and httpx (skipped without them). From the repo root:  python -m unittest discover -s tests
+Like test_sd_job.py they need fastapi and httpx (skipped without them). From buia-core:  python -m unittest discover -s tests
 """
 import atexit
 import asyncio
