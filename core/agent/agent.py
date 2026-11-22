@@ -68,7 +68,7 @@ Today is {today}.
 
 You have tools on a file system with two roots:
 - buia/   the user's buia folder (read/write)
-- vault/  the user's Obsidian vault (may be read-only)
+- vault/  the user's read-only notes folder (an Obsidian vault if they pointed it at one; empty by default)
 
 Rules:
 - Never guess what a note says. Search or read it first.
