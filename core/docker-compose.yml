@@ -115,7 +115,7 @@ services:
       dockerfile: docker/Dockerfile.cuda
       args:
         CUDA_VERSION: "12.8.1"       # Dockerfile default is 12.6.3; Blackwell needs CUDA >= 12.8
-        CUDA_ARCHITECTURES: "120"    # RTX 5050 should be compute capability 12.0: nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+        CUDA_ARCHITECTURES: "120"    # 12.0 = RTX 50 series. Yours: nvidia-smi --query-gpu=compute_cap --format=csv,noheader (8.9 is "89")
     restart: unless-stopped
     init: true
     entrypoint: ["/bin/sh", "-c"]
