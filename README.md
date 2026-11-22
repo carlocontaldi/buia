@@ -86,12 +86,12 @@ Use `serve`, never `funnel`: the agent has one shared password only and can writ
 
 | In git | Not in git (git-ignored or kept elsewhere, never committed) |
 |---|---|
-| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `install.cmd`, `update.cmd` | `core/.env` (paths, token, password), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
+| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `.github/workflows/`, `install.cmd`, `update.cmd` | `core/.env` (token, password, optional paths), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
 
 ## Settings
 
 All settings are in `.env` (each is documented in `.env.example`). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
-`MEMORY_FILES` (`.md` files loaded on every request; default `BUIA.md`, `memory/*.md`, `memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
+`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
 `ALLOWED_HOSTS` (extra host names for the web UI, see Security), `BUIA_PASSWORD` (the web UI password), `WEB_ACCESS` (`on` by default, see Web access).
 
 ## Troubleshooting
