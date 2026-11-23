@@ -34,7 +34,7 @@ if (-not (Test-Path .env)) {
     Write-Host "Created .env"
 }
 
-# 3b. Web UI password: a random one the first time (fresh .env, or an .env from before the login existed), never overwritten
+# 3b. Web UI password: a random one if .env has none, never overwritten
 $envLines = @(Get-Content .env)
 if (-not ($envLines -match '^BUIA_PASSWORD=')) {
     $pw = New-Password

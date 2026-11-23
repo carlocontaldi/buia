@@ -682,7 +682,7 @@ async def api_cancel(body: IdBody):
 @router.post("/use")
 async def api_use(body: IdBody):
     p = preset(body.id)
-    if any(shell_unsafe(part) for f in p["files"] for part in f[1:]):  # saved before clean_path refused such paths: kept, but never started
+    if any(shell_unsafe(part) for f in p["files"] for part in f[1:]):  # such a path (say, in a hand-edited custom.json) is kept, but never started
         raise HTTPException(409, "this model's file path contains a space or a wildcard character, which the server start script cannot pass on; remove it from the panel")
     if not all(dest(f).exists() for f in p["files"]):
         raise HTTPException(409, "download the model first")

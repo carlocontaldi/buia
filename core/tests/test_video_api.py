@@ -389,8 +389,8 @@ class VideoApiTests(unittest.TestCase):
             self.assertIsNone(second["next_offset"])
             self.assertEqual(second["chats"][0]["id"], ids[0])
 
-            legacy = self.client.get("/api/chats")
-            self.assertIsInstance(legacy.json(), list)
+            unpaged = self.client.get("/api/chats")
+            self.assertIsInstance(unpaged.json(), list)
 
             invalid_shape = {"id": ids[0], "messages": [{"role": "system", "content": "not a chat role"}]}
             (Path(chats) / f"{ids[0]}.json").write_text(json.dumps(invalid_shape), encoding="utf-8")

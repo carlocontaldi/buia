@@ -75,7 +75,6 @@ cd $HOME\buia
 ```
 
 The release number is in `core/agent/VERSION` and in the answer of `http://127.0.0.1:8000/api/health`; give it when you report a problem.
-The first update that brings the login adds a random `BUIA_PASSWORD` to your `.env` and prints it. If the login page says it is not set, you updated with an older `update.ps1`: run `.\update.cmd` once more.
 
 ## Phone (Tailscale)
 
@@ -234,8 +233,7 @@ docker compose up -d --build cogvideo
 ```
 
 (`--allow-unsafe` keeps `setuptools` in the file: torch needs it and `python:3.12-slim` does not ship it.) The file in the repo was generated from pip's resolution plus PyPI's hashes instead.
-It has been built and run on the 8 GB laptop: a first run failed in the denoising loop because the prompt embeddings were still on the CPU, and `cogvideo/generate.py`
-now moves them to the GPU; a finished video confirmed the fix (timing in the CogVideoX section).
+It has been built and run on the 8 GB laptop: a finished video (timing in the CogVideoX section).
 
 The base image tag `python:3.12-slim` in `agent/Dockerfile` can still move on a rebuild. To freeze it, run the two commands in the comment at the top of
 the Dockerfile and replace the tag with the printed `python@sha256:...` value (the llama image is already pinned that way).

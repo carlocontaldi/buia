@@ -18,7 +18,7 @@ function New-Password {   # 32 hex characters from the OS random number generato
 git pull --ff-only
 Check "git pull"
 
-# the web UI login came after the first release: an .env from before it has no password yet (install.ps1 does the same for a fresh one)
+# an .env without BUIA_PASSWORD leaves nobody able to log in: add a random one (install.ps1 does the same)
 if ((Test-Path .env) -and -not (@(Get-Content .env) -match '^BUIA_PASSWORD=')) {
     $pw = New-Password
     Add-Content .env "`nBUIA_PASSWORD=$pw" -Encoding ascii
