@@ -81,7 +81,7 @@ class VersionTests(unittest.TestCase):
         self.assertIn("VERSION", (AGENT_DIR / "Dockerfile").read_text(encoding="utf-8"))
 
 
-class MemoryPatternTests(unittest.TestCase):
+class MemoryFilesTests(unittest.TestCase):
     def test_the_defaults_name_buia(self):
         self.assertEqual(agent.MEMORY_FILES, ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/Projects/*.md"])
 
