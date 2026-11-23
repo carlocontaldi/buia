@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="core/agent/static/buia-logo.png" alt="" width="120"><br>
+  <img src="assets/buia-logo.png" alt="" width="120"><br>
   BUIA
 </h1>
 
@@ -149,8 +149,7 @@ write the prompt and press **Generate**.
   Values are remembered per model in your browser; **Reset parameters** restores the defaults.
 - The progress bar goes through the phases (waiting, loading, sampling, decoding) with the exact step beside it, e.g. `Sampling 7/10 · 41 s`; it is one scale for all phases,
   so its sections are a layout, not shares of the time. CogVideoX reports its steps in the job. stable-diffusion.cpp's job answer has no progress, only its output has,
-  so `sd-run.sh` also copies that to the `sdlogs` volume (`active-video.log`, emptied at every server start and past 10 MB) and the agent reads it from there (read-only);
-  after an update, `.\update.cmd` recreates the services with it. Without the volume the bar is not filled and shows what is happening and the elapsed time.
+  so `sd-run.sh` also copies that to the `sdlogs` volume (`active-video.log`, emptied at every server start and past 10 MB) and the agent reads it from there (read-only). Without the volume the bar is not filled and shows what is happening and the elapsed time.
 - One video at a time: the chat refuses new messages while it runs (its model would load next to the video model), and the chat model is unloaded before the job as for `generate_video`.
   Reloading the page shows the running job again. The video is saved in `generated\`, not added to a chat.
 - **Cancel** under the bar ends the job and frees the chat. CogVideoX stops at once. stable-diffusion.cpp's server cannot interrupt a generating job,

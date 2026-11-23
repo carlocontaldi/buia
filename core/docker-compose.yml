@@ -90,6 +90,20 @@ services:
         source: sdlogs                  # sd-server's output (sd-run.sh copies it): the Video panel reads the sampling steps of a job from it
         target: /sdlogs
         read_only: true
+      # The web UI's logo and icon live in assets/, next to the README banner, and are mounted into its static folder (the image build
+      # cannot reach outside core/agent). Without them the UI only loses its icons.
+      - type: bind
+        source: ../assets/buia-logo.png
+        target: /app/static/buia-logo.png
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../assets/buia-icon-64.png
+        target: /app/static/buia-icon-64.png
+        read_only: true
+        bind:
+          create_host_path: false
 
   # Web search for the agent's web_search tool: a SearXNG metasearch engine, no account or API key. It starts with everything else; the agent
   # does not wait for it, so a failed start only makes web_search report an error. WEB_ACCESS=off in .env removes the tools but not this container.

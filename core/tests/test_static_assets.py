@@ -1,6 +1,7 @@
 """Every local file that agent/static/index.html refers to (script src, link href, img src, CSS url()) must be served by the real app.
 
 The static folder is mounted at "/", so the file agent/static/x.js is /x.js; a "static/x.js" reference answers 404 and the browser silently skips it.
+The logo and icon live in assets/ and docker-compose.yml mounts them into static/: the test app does not have those two, so their source files are checked instead.
 Like test_video_api.py this needs fastapi and httpx (skipped without them). From core:  python -m unittest discover -s tests
 """
 import atexit
@@ -24,6 +25,10 @@ DATA = tempfile.mkdtemp()  # agent.py reads these when it is imported (the other
 atexit.register(shutil.rmtree, DATA, ignore_errors=True)
 os.environ.update(DATA_DIR=DATA, BUIA_PASSWORD="test")
 AGENT_DIR = Path(__file__).resolve().parents[1] / "agent"
+ROOT = AGENT_DIR.parents[1]
+COMPOSE = (AGENT_DIR.parent / "docker-compose.yml").read_text(encoding="utf-8")
+# URL path in the page -> file in assets/, for the "../assets/X -> /app/static/Y" mounts of the compose file
+MOUNTED = {"/" + target: source for source, target in re.findall(r"source: \.\./assets/([\w.-]+)\s+target: /app/static/([\w.-]+)", COMPOSE)}
 if AGENT_DIR.is_dir():
     sys.path.insert(0, str(AGENT_DIR))
 import agent  # noqa: E402
@@ -68,9 +73,22 @@ class StaticAssets(unittest.TestCase):
         p.feed(page.text)
         paths = sorted({x for x in map(local, p.found) if x})
         self.assertTrue(paths, "found no local references in index.html, the test would pass for nothing")
-        missing = {x: c.get(x).status_code for x in paths if c.get(x).status_code != 200}
+        missing = {x: c.get(x).status_code for x in paths if x not in MOUNTED and c.get(x).status_code != 200}
         self.assertEqual(missing, {}, "index.html refers to files the app does not serve (static/ is mounted at /)")
+        for path in paths:
+            if path in MOUNTED:
+                self.assertTrue((ROOT / "assets" / MOUNTED[path]).is_file(), f"{path}: its source in assets/ is missing")
 
+    def test_a_mounted_file_is_not_also_kept_in_static(self):
+        self.assertTrue(MOUNTED, "found no mounts from assets/ in docker-compose.yml, the test would pass for nothing")
+        for path in MOUNTED:
+            self.assertFalse((AGENT_DIR / "static" / path.lstrip("/")).exists(), f"{path} is in static/ and mounted from assets/")
+
+    def test_the_readme_images_exist(self):
+        paths = re.findall(r'<img src="([^"]+)"', (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertTrue(paths, "found no images in README.md, the test would pass for nothing")
+        for rel in paths:
+            self.assertTrue((ROOT / rel).is_file(), rel)
 
     def test_every_overlay_panel_is_positioned_by_the_base_rule(self):
         html = (AGENT_DIR / "static" / "index.html").read_text(encoding="utf-8")
