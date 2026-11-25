@@ -45,7 +45,7 @@ if (-not ($envLines -match '^BUIA_PASSWORD=')) {
 }
 
 # 4. Folders and memory file the containers mount. As in docker-compose.yml, BUIA_PATH defaults to the folder above core and VAULT_PATH to .vault inside it
-function Get-EnvValue($name) { (@(Get-Content .env) | Where-Object { $_ -match "^$name=\S" } | Select-Object -First 1) -replace "^$name=", '' }
+function Get-EnvValue($name) { (@(Get-Content .env -Encoding UTF8) | Where-Object { $_ -match "^$name=\S" } | Select-Object -First 1) -replace "^$name=", '' }
 $buia = Get-EnvValue 'BUIA_PATH'
 if (-not $buia) { $buia = (Resolve-Path '..').Path }
 $vault = Get-EnvValue 'VAULT_PATH'
@@ -73,7 +73,13 @@ if ($Sd) {
 
 # 5b. Optional: CogVideoX-2b. The flag lives in .env so that update.ps1 keeps rebuilding the service
 if ($CogVideo) {
-    Set-Content .env (@(Get-Content .env | Where-Object { $_ -notmatch '^COGVIDEO=' }) + 'COGVIDEO=on') -Encoding ascii
+    # Only the COGVIDEO line changes. .env is read and written as UTF-8, which is what Compose reads: Set-Content -Encoding ascii turned every
+    # accented character (in a path, say) into "?", and Windows PowerShell 5.1 reads a file without a BOM as ANSI.
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    $envPath = Join-Path $PSScriptRoot '.env'
+    $text = [IO.File]::ReadAllText($envPath, $utf8)
+    if ($text -match '(?m)^COGVIDEO=') { $new = $text -replace '(?m)^COGVIDEO=[^\r\n]*', 'COGVIDEO=on' } else { $new = $text.TrimEnd() + "`nCOGVIDEO=on`n" }
+    if ($new -ne $text) { [IO.File]::WriteAllText($envPath, $new, $utf8) }
 }
 if (@(Get-Content .env) -match '^COGVIDEO=on') {
     New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
