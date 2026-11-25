@@ -465,7 +465,7 @@ class VideoApiTests(unittest.TestCase):
             buia_dir.mkdir(); vault.mkdir()
             for i in range(5):
                 (buia_dir / f"note-{i}.txt").write_text(f"needle {i}", encoding="utf-8")
-            with patch.object(agent, "DATA", data_path), patch.object(agent, "ROOTS", [buia_dir, vault]):
+            with patch.object(agent, "DATA", data_path.resolve()), patch.object(agent, "ROOTS", [buia_dir.resolve(), vault.resolve()]):
                 self.assertIn("offset=2", agent.list_dir("buia", limit=2))
                 results = agent.search_files("needle", "buia", limit=2)
                 self.assertIn("note-0.txt", results)
