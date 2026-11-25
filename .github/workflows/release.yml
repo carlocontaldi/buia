@@ -1,0 +1,47 @@
+name: release
+
+# Publishes a GitHub release when a tag like v0.1.0 is pushed. To make one:
+#   1. Set core/agent/VERSION and write release-notes/v<version>.md, then commit and push to main.
+#   2. Once the tests are green on main:  git tag -a v<version> -m "buia <version>"  and  git push origin v<version>
+# The run stops before publishing if the tag differs from VERSION, the notes file is missing or any test fails.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag must be v plus core/agent/VERSION, and its notes must exist
+        run: |
+          version=$(tr -d '[:space:]' < core/agent/VERSION)
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "Tag $GITHUB_REF_NAME does not match core/agent/VERSION ($version)"; exit 1; }
+          test -f "release-notes/$GITHUB_REF_NAME.md" || { echo "release-notes/$GITHUB_REF_NAME.md is missing"; exit 1; }
+
+  tests:
+    needs: check
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "buia ${GITHUB_REF_NAME#v}" --notes-file "release-notes/$GITHUB_REF_NAME.md"
