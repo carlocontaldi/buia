@@ -46,3 +46,43 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path), [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count -gt 0) { throw ($errors | Out-String) }
           }
+
+  # The compose file and the agent image. The runner has no GPU, so the agent is started alone with its GPU reservation dropped.
+  compose:
+    name: compose file and agent image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the compose file with every profile on
+        run: docker compose --profile sd --profile cogvideo config --quiet
+      - name: Build the agent image and start it alone
+        run: |
+          printf 'services:\n  agent:\n    deploy: !reset null\n' > "$RUNNER_TEMP/no-gpu.yml"
+          docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" up -d --build --no-deps agent
+      # llama is not running, so /api/health answers 503 {"ready": false, "version": ...}: the version proves the image has VERSION and imports every module.
+      - name: Check the health answer and the logo and icon mounts
+        run: |
+          set -eu
+          base=http://127.0.0.1:8000
+          for _ in $(seq 1 30); do
+            body=$(curl -s "$base/api/health" || true)
+            case "$body" in *'"version"'*) break ;; esac
+            sleep 2
+          done
+          echo "$body"
+          want=$(tr -d '[:space:]' < agent/VERSION)
+          python3 -c 'import json, sys; d = json.loads(sys.argv[1]); assert d["version"] == sys.argv[2], d' "$body" "$want"
+          for f in buia-logo.png buia-icon-64.png buia-logo-256.png; do
+            got=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$base/$f")
+            echo "$f: $got"
+            test "$got" = "200 image/png"
+          done
+      - name: Show the agent log
+        if: failure()
+        run: docker compose logs agent
