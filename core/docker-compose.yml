@@ -1,3 +1,7 @@
+# Fixed project name, so the volumes are buia_models and buia_sdlogs. Without it Compose uses the folder name (core), which another project could share.
+# COMPOSE_PROJECT_NAME in .env, or the -p option, overrides it.
+name: buia
+
 x-logging: &logging              # Docker keeps container logs forever unless told otherwise: keep the newest 60 MB per service
   driver: json-file
   options:
