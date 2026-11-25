@@ -33,6 +33,7 @@ It generates text, images and videos, reads and writes your notes through file t
 - Windows 11, Docker Desktop (WSL2 backend) with NVIDIA GPU support
 - NVIDIA driver recent enough for CUDA 13 (the compose file uses `server-cuda13`, pinned by digest to a known working build; for an older driver use `server-cuda` and drop the digest)
 - Git. Tailscale if you want phone access.
+- Linux is untested: the installer and launchers are Windows scripts, and on a Linux host the containers would create files in your buia folder as root (see Security).
 - For image and video generation (`-Sd`): the sd image is built for compute capability 12.0 (RTX 50 series, CUDA 12.8). For another GPU, set `CUDA_ARCHITECTURES` under `sd` in `core\docker-compose.yml` (`nvidia-smi --query-gpu=compute_cap --format=csv,noheader` prints it; drop the dot, 8.9 is `89`) and run `.\update.cmd`. The chat models and the CogVideoX service are not tied to that value.
 - Developed and measured on one machine: RTX 5050 Laptop GPU (8 GB VRAM), 32 GB RAM. The image and video presets assume that size.
 
@@ -197,6 +198,15 @@ Not covered:
 - The model chooses the words of a search, so a page that tells it to search for something from your notes sends those words to the search engines
   (the page's author does not see them). Turn `WEB_ACCESS` off if that matters to you.
 - If Obsidian has plugins that run code found in notes (Dataview JS, Templater), a note the agent wrote could run when you open it. Keep those off for the folders the agent writes to.
+- No service sets a `user:` and the agent and cogvideo images have no `USER` line, so their processes run as root inside the container. What they can reach is limited to what `docker-compose.yml` mounts into them.
+
+## Licences
+
+BUIA is MIT-licensed (`LICENSE`). It downloads or builds other software and models on your machine and ships none of them:
+
+- SearXNG (the `searxng` service) is AGPL-3.0. It runs unmodified in its own container, and BUIA only sends it search requests.
+- llama.cpp and stable-diffusion.cpp are MIT. The NVIDIA CUDA libraries inside the images are under NVIDIA's licence.
+- Each model has the licence its authors gave it, on its Hugging Face page. Some restrict how you may use the model or its output. The Models panel does not show licences, so read the model card before you download.
 
 ## Running tests
 
