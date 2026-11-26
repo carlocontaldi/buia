@@ -119,10 +119,10 @@ services:
 
   # Web search for the agent's web_search tool: a SearXNG metasearch engine, no account or API key. It starts with everything else; the agent
   # does not wait for it, so a failed start only makes web_search report an error. WEB_ACCESS=off in .env removes the tools but not this container.
-  # The image is the moving tag: to freeze it like the llama image, run "docker pull searxng/searxng:latest" and then
-  # docker image inspect searxng/searxng:latest --format "{{index .RepoDigests 0}}", and replace the tag below with the printed name@sha256:... value.
+  # Pinned by digest like the llama image (the newest build on 2026-11-26). To move to a newer one, replace the digest below with the "Digest:" line of
+  # docker buildx imagetools inspect docker.io/searxng/searxng:latest
   searxng:
-    image: docker.io/searxng/searxng:latest
+    image: docker.io/searxng/searxng:latest@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
     restart: unless-stopped
     logging: *logging
     environment:

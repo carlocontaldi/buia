@@ -244,5 +244,7 @@ docker compose up -d --build cogvideo
 (`--allow-unsafe` keeps `setuptools` in the file: torch needs it and `python:3.12-slim` does not ship it.) The file in the repo was generated from pip's resolution plus PyPI's hashes instead.
 It has been built and run on the 8 GB laptop: a finished video (timing in the CogVideoX section).
 
-The base image tag `python:3.12-slim` in `agent/Dockerfile` can still move on a rebuild. To freeze it, run the two commands in the comment at the top of
-the Dockerfile and replace the tag with the printed `python@sha256:...` value (the llama image is already pinned that way).
+The base image `python:3.12-slim` (`agent/Dockerfile` and `cogvideo/Dockerfile`) and the `searxng/searxng` image (`docker-compose.yml`) are pinned by digest, like the
+llama image, so a rebuild starts from the same ones. To move one on purpose, replace its digest with the `Digest:` line of `docker buildx imagetools inspect <image>`
+(in both Dockerfiles together) and rebuild. The `sd` image is the exception: stable-diffusion.cpp's own Dockerfile starts from two `nvidia/cuda` tags and installs
+packages with apt, and this repository does not pin them.
