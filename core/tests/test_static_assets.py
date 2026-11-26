@@ -1,7 +1,7 @@
 """Every local file that agent/static/index.html refers to (script src, link href, img src, CSS url()) must be served by the real app.
 
 The static folder is mounted at "/", so the file agent/static/x.js is /x.js; a "static/x.js" reference answers 404 and the browser silently skips it.
-The logo and icon live in assets/ and docker-compose.yml mounts them into static/: the test app does not have those two, so their source files are checked instead.
+The logos and the icon live in assets/ and docker-compose.yml mounts them into static/: the test app does not have those three, so their source files are checked instead.
 Like test_video_api.py this needs fastapi and httpx (skipped without them). From core:  python -m unittest discover -s tests
 """
 import atexit
