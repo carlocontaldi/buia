@@ -177,6 +177,18 @@ class SetupShTests(unittest.TestCase):
         self.assertEqual(self.run_setup().returncode, 0)
         self.assertEqual(re.findall(r"(?m)^BUIA_SESSION_SALT=(.*)$", self.env_text()), salt, "a salt that is there stays: changing it logs everyone out")
 
+    def test_stale_uid_and_gid_are_normalized_for_the_current_user(self):
+        shutil.copy(CORE / ".env.example", self.env)
+        with self.env.open("a", encoding="utf-8") as f:
+            f.write("BUIA_PASSWORD=mine\nBUIA_UID=1\nBUIA_GID=2\n")
+        self.assertEqual(self.run_setup().returncode, 0)
+        if os.getuid() == 0:
+            self.assertNotRegex(self.env_text(), r"(?m)^BUIA_UID=")
+            self.assertNotRegex(self.env_text(), r"(?m)^BUIA_GID=")
+        else:
+            self.assertRegex(self.env_text(), rf"(?m)^BUIA_UID={os.getuid()}$")
+            self.assertRegex(self.env_text(), rf"(?m)^BUIA_GID={os.getgid()}$")
+
     def test_an_old_nvidia_driver_is_pointed_at_llama_image(self):
         r = self.run_setup(FAKE_DRIVER="550.54.14")
         self.assertIn("older than 580", r.stderr)

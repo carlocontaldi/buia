@@ -25,6 +25,13 @@ jobs:
           version=$(tr -d '[:space:]' < core/agent/VERSION)
           test "$GITHUB_REF_NAME" = "v$version" || { echo "Tag $GITHUB_REF_NAME does not match core/agent/VERSION ($version)"; exit 1; }
           test -f "release-notes/$GITHUB_REF_NAME.md" || { echo "release-notes/$GITHUB_REF_NAME.md is missing"; exit 1; }
+      - name: The tag must point to a commit on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Tag $GITHUB_REF_NAME points to $GITHUB_SHA, which is not contained in main"
+            exit 1
+          }
 
   tests:
     needs: check

@@ -48,7 +48,15 @@ if (-not ($envLines -match '^BUIA_PASSWORD=')) {
 $envLines = @(Get-Content .env)
 if (-not ($envLines -match '^BUIA_SESSION_SALT=.+')) {
     $salt = New-Password
-    Add-Content .env "`nBUIA_SESSION_SALT=$salt" -Encoding ascii
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    $envPath = Join-Path $PSScriptRoot '.env'
+    $text = [IO.File]::ReadAllText($envPath, $utf8)
+    if ($text -match '(?m)^BUIA_SESSION_SALT=') {
+        $new = $text -replace '(?m)^BUIA_SESSION_SALT=[^\r\n]*', "BUIA_SESSION_SALT=$salt"
+    } else {
+        $new = $text.TrimEnd() + "`nBUIA_SESSION_SALT=$salt`n"
+    }
+    [IO.File]::WriteAllText($envPath, $new, $utf8)
 }
 
 # 4. Folders and memory file the containers mount. As in docker-compose.yml, BUIA_PATH defaults to the folder above core and VAULT_PATH to .vault inside it

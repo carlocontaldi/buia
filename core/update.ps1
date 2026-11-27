@@ -28,7 +28,15 @@ if ((Test-Path .env) -and -not (@(Get-Content .env) -match '^BUIA_PASSWORD=')) {
 # Give existing installations a stable random salt for session signing.
 if ((Test-Path .env) -and -not (@(Get-Content .env) -match '^BUIA_SESSION_SALT=.+')) {
     $salt = New-Password
-    Add-Content .env "`nBUIA_SESSION_SALT=$salt" -Encoding ascii
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    $envPath = Join-Path $PSScriptRoot '.env'
+    $text = [IO.File]::ReadAllText($envPath, $utf8)
+    if ($text -match '(?m)^BUIA_SESSION_SALT=') {
+        $new = $text -replace '(?m)^BUIA_SESSION_SALT=[^\r\n]*', "BUIA_SESSION_SALT=$salt"
+    } else {
+        $new = $text.TrimEnd() + "`nBUIA_SESSION_SALT=$salt`n"
+    }
+    [IO.File]::WriteAllText($envPath, $new, $utf8)
 }
 
 # image/video generation is rebuilt too if it was installed (install.ps1 -Sd)

@@ -109,9 +109,10 @@ main() {
 
   # 5c. The agent container runs as you, so the files it writes in your buia folder are yours (docker-compose.yml: user:). As root it stays root.
   if [ "$(id -u)" -ne 0 ]; then
-    grep -q '^BUIA_UID=' .env || set_env BUIA_UID "$(id -u)"
-    grep -q '^BUIA_GID=' .env || set_env BUIA_GID "$(id -g)"
+    set_env BUIA_UID "$(id -u)"
+    set_env BUIA_GID "$(id -g)"
   else
+    sed -i '/^BUIA_UID=/d; /^BUIA_GID=/d' .env
     warn "Running as root: the files BUIA writes will belong to root. Run it as your normal user (in the docker group) instead."
   fi
 
