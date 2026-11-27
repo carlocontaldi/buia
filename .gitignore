@@ -9,7 +9,7 @@ __pycache__/
 *.gguf
 *.log
 
-# image/video generation: sd.cpp source is cloned by install.ps1 -Sd; model files are large
+# image/video generation: sd.cpp source is cloned by the installer's -Sd option (setup.sh --sd); model files are large
 sdcpp/
 sdmodels/
 

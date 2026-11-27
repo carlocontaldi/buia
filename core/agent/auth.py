@@ -65,7 +65,7 @@ async def login(body: Login, request: Request):
     global fails, locked_until
     pwd = password()
     if not pwd:
-        raise HTTPException(503, "BUIA_PASSWORD is not set in .env. Run .\\install.cmd (it creates one), then reload this page.")
+        raise HTTPException(503, "BUIA_PASSWORD is not set in .env. Run the installer (install.cmd on Windows, setup.sh on Linux: it creates one), then reload this page.")
     if time.time() < locked_until:
         raise HTTPException(429, "too many wrong passwords; wait a minute")
     if not hmac.compare_digest(body.password.encode(), pwd.encode()):
