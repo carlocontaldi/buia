@@ -10,7 +10,7 @@ x-logging: &logging              # Docker keeps container logs forever unless to
 
 services:
   llama:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:222d8eeee19c4407a0ad00eec534dc5d372c706c4c67f58e3993a25ed8ed3d3e   # pinned to the build known to work (2026-11-06); RTX 50-series + CUDA 13 driver. Older driver: use :server-cuda and drop the digest
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:222d8eeee19c4407a0ad00eec534dc5d372c706c4c67f58e3993a25ed8ed3d3e}   # pinned to the build known to work (2026-11-06); CUDA 13 needs NVIDIA driver 580 or newer. Older driver: LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda in .env
     restart: unless-stopped
     logging: *logging
     environment:
@@ -43,6 +43,7 @@ services:
 
   agent:
     build: ./agent
+    user: "${BUIA_UID:-0}:${BUIA_GID:-0}"   # Linux: setup.sh sets your ids in .env, so chats/, generated/ and memory/ belong to you, not root. Docker Desktop (Windows) does not care: 0:0 = the image's root
     restart: unless-stopped
     logging: *logging
     depends_on: [llama]
@@ -87,7 +88,7 @@ services:
         target: /data/vault
         read_only: true                 # the agent can read the vault but never change it
         bind:
-          create_host_path: true        # the default .vault is not in the repo: let Docker create it if install.ps1 has not
+          create_host_path: true        # the default .vault is not in the repo: let Docker create it if the installer has not
       - type: bind
         source: ./sdmodels              # image/video model files: the Models panel downloads them here (sd and sd-video mount the same folder read-only)
         target: /data/sdmodels          # outside the buia folder and the vault, so the model's file tools cannot reach it
@@ -142,7 +143,7 @@ services:
       dockerfile: docker/Dockerfile.cuda
       args:
         CUDA_VERSION: "12.8.1"       # Dockerfile default is 12.6.3; Blackwell needs CUDA >= 12.8
-        CUDA_ARCHITECTURES: "120"    # 12.0 = RTX 50 series. Yours: nvidia-smi --query-gpu=compute_cap --format=csv,noheader (8.9 is "89")
+        CUDA_ARCHITECTURES: "${SD_CUDA_ARCHITECTURES:-120}"    # 12.0 = RTX 50 series. Yours: SD_CUDA_ARCHITECTURES in .env (setup.sh sets it); nvidia-smi --query-gpu=compute_cap --format=csv,noheader prints it (8.9 is "89")
     restart: unless-stopped
     init: true
     entrypoint: ["/bin/sh", "-c"]
@@ -184,8 +185,8 @@ services:
       service: sd
     command: ["exec /bin/sh /sd-run.sh /models/active-video.args ${SD_VIDEO_ARGS:-}"]
 
-  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with .\install.cmd -CogVideo
-  # (it sets COGVIDEO=on in .env, which update.ps1 reads). Pick CogVideoX in the Models panel (Use): from then on video jobs go here instead of sd-video.
+  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with install.cmd -CogVideo (Linux: setup.sh --cogvideo)
+  # (it sets COGVIDEO=on in .env, which the update reads). Pick CogVideoX in the Models panel (Use): from then on video jobs go here instead of sd-video.
   # Each job runs in a fresh process (cogvideo/server.py starts cogvideo/generate.py), so this service holds no VRAM while idle. The 9.5 GB text encoder
   # runs on the CPU: Docker Desktop's WSL2 VM needs about 12 GB of free RAM for a job (see README > Image and video generation).
   cogvideo:

@@ -36,6 +36,12 @@ jobs:
         run: python -c "import fastapi, httpx"
       - name: Run the tests
         run: python -m unittest discover -s tests -v
+      # setup.sh is the Linux installer and updater; the runner has ShellCheck. Its behaviour is tested in tests/test_setup_sh.py.
+      - name: Lint the Linux setup script
+        if: runner.os == 'Linux'
+        run: |
+          bash -n ../setup.sh
+          shellcheck ../setup.sh
       # The launchers run the scripts with Windows PowerShell (powershell, not pwsh): parse them with it.
       - name: Parse the PowerShell scripts
         if: runner.os == 'Windows'
@@ -62,10 +68,13 @@ jobs:
           persist-credentials: false
       - name: Check the compose file with every profile on
         run: docker compose --profile sd --profile cogvideo config --quiet
+      # The agent runs as the runner's own user, as it does on a Linux machine after setup.sh (BUIA_UID and BUIA_GID in .env).
       - name: Build the agent image and start it alone
         run: |
+          echo "BUIA_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "BUIA_GID=$(id -g)" >> "$GITHUB_ENV"
           printf 'services:\n  agent:\n    deploy: !reset null\n' > "$RUNNER_TEMP/no-gpu.yml"
-          docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" up -d --build --no-deps agent
+          BUIA_UID=$(id -u) BUIA_GID=$(id -g) docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" up -d --build --no-deps agent
       # llama is not running, so /api/health answers 503 {"ready": false, "version": ...}: the version proves the image has VERSION and imports every module.
       - name: Check the health answer and the logo and icon mounts
         run: |
@@ -84,6 +93,13 @@ jobs:
             echo "$f: $got"
             test "$got" = "200 image/png"
           done
+      # What the files in the buia folder look like on a Linux host: made by the agent, owned by you.
+      - name: Check that the agent runs as the runner user and writes files that user owns
+        run: |
+          set -eu
+          docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" exec -T agent sh -c 'id -u; touch /data/buia/.agent-write-test'
+          test "$(stat -c %u ../.agent-write-test)" = "$(id -u)"
+          rm ../.agent-write-test
       - name: Show the agent log
         if: failure()
         run: docker compose logs agent
