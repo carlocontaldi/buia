@@ -25,6 +25,12 @@ if ((Test-Path .env) -and -not (@(Get-Content .env) -match '^BUIA_PASSWORD=')) {
     Write-Host "Web UI password: $pw   (saved in .env as BUIA_PASSWORD; change it there)"
 }
 
+# Give existing installations a stable random salt for session signing.
+if ((Test-Path .env) -and -not (@(Get-Content .env) -match '^BUIA_SESSION_SALT=.+')) {
+    $salt = New-Password
+    Add-Content .env "`nBUIA_SESSION_SALT=$salt" -Encoding ascii
+}
+
 # image/video generation is rebuilt too if it was installed (install.ps1 -Sd)
 $compose = @()
 if (Test-Path sdcpp) { $compose = @("--profile", "sd") }
