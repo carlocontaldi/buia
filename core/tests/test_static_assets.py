@@ -99,5 +99,15 @@ class StaticAssets(unittest.TestCase):
         unpositioned = [p for p in panels if "#" + p not in rule.group(1)]
         self.assertEqual(unpositioned, [], "these panels would render in the page flow instead of over it")
 
+    def test_header_buttons_and_the_theme_selector_are_where_the_ui_expects_them(self):
+        html = (AGENT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        header = re.search(r"<header>(.*?)</header>", html, re.S)
+        self.assertIsNotNone(header, "the header is gone")
+        buttons = re.findall(r'<button[^>]*\bid="(\w+)"', header.group(1))
+        self.assertEqual(buttons, ["chats", "models", "vopen", "new"], "header buttons: Chats, Settings, Video dashboard, New")
+        for ident in ("vopen", "theme"):  # the page looks both up by id: a second one would silently win or lose
+            self.assertEqual(len(re.findall(rf'\bid="{ident}"', html)), 1, ident)
+        self.assertTrue(html.index('<div id="mpanel"') < html.index('id="theme"') < html.index('<div id="vpanel"'), "the theme selector belongs in the Settings panel")
+
 if __name__ == "__main__":
     unittest.main()
