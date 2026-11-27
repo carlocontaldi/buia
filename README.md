@@ -194,7 +194,7 @@ the image is several GB, the first build takes a while). It sets `COGVIDEO=on` i
 ## Security
 
 The web UI is protected by one password (`BUIA_PASSWORD` in `.env`): every API call except the login and the health check needs the session cookie a login sets (HttpOnly, `SameSite=Strict`,
-valid 30 days, signed with a key derived from the password, so changing the password logs everyone out). Five wrong passwords in a row lock the login for a minute.
+valid 30 days, signed with a key derived from the password and a random per-installation salt, `BUIA_SESSION_SALT` in `.env`, so changing either logs everyone out). Five wrong passwords in a row lock the login for a minute.
 Without a password nobody can log in. It is meant for `localhost` and your own tailnet, not the open internet. Notes, search results and web pages can contain text that
 tries to give the model orders (prompt injection). The prompt tells the model to treat file text as data, but that is only a request, so the limits that matter are in the code:
 

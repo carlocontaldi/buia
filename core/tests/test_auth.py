@@ -43,6 +43,13 @@ class SessionKeyTests(unittest.TestCase):
         with patch.dict(os.environ, {"BUIA_PASSWORD": "test", "BUIA_SESSION_SALT": "buia-session-v1"}, clear=True):
             self.assertEqual(auth.key(), fallback)
 
+    def test_an_empty_salt_is_a_missing_salt(self):
+        # docker-compose.yml passes BUIA_SESSION_SALT=${BUIA_SESSION_SALT:-}: an .env without the line reaches the agent as ""
+        with patch.dict(os.environ, {"BUIA_PASSWORD": "test"}, clear=True):
+            fallback = auth.key()
+        with patch.dict(os.environ, {"BUIA_PASSWORD": "test", "BUIA_SESSION_SALT": ""}, clear=True):
+            self.assertEqual(auth.key(), fallback)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,7 +31,7 @@ def _derive_key(pwd: str, salt: str) -> bytes:
 
 
 def key() -> bytes:
-    # Install/update scripts provide a random stable salt; the fallback keeps manual installs compatible.
+    # The setup script adds a random salt per installation to .env. Without one (an empty BUIA_SESSION_SALT counts as none) the key uses a fixed salt: sessions still work, but the key then depends on the password alone.
     return _derive_key(password(), os.getenv("BUIA_SESSION_SALT") or "buia-session-v1")
 
 
