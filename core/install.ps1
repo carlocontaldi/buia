@@ -44,6 +44,13 @@ if (-not ($envLines -match '^BUIA_PASSWORD=')) {
     Write-Warning "BUIA_PASSWORD in .env is empty, so nobody can log in. Put a password after the = and run this again."
 }
 
+# 3c. Session-signing salt: random and stable for this installation
+$envLines = @(Get-Content .env)
+if (-not ($envLines -match '^BUIA_SESSION_SALT=.+')) {
+    $salt = New-Password
+    Add-Content .env "`nBUIA_SESSION_SALT=$salt" -Encoding ascii
+}
+
 # 4. Folders and memory file the containers mount. As in docker-compose.yml, BUIA_PATH defaults to the folder above core and VAULT_PATH to .vault inside it
 function Get-EnvValue($name) { (@(Get-Content .env -Encoding UTF8) | Where-Object { $_ -match "^$name=\S" } | Select-Object -First 1) -replace "^$name=", '' }
 $buia = Get-EnvValue 'BUIA_PATH'

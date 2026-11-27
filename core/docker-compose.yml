@@ -65,6 +65,7 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}   # extra host names the web UI may be opened under (localhost, 127.0.0.1 and *.ts.net always work)
       TZ: ${TZ:-UTC}
       BUIA_PASSWORD: ${BUIA_PASSWORD:-}   # web UI login password; empty = nobody can log in
+      BUIA_SESSION_SALT: ${BUIA_SESSION_SALT:-}   # stable per-install salt for deriving the session-signing key
       WEB_ACCESS: ${WEB_ACCESS:-on}       # the web_search and web_fetch tools; off removes both
       SEARCH_URL: http://searxng:8080     # where web_search asks (the searxng service below)
       NVIDIA_DRIVER_CAPABILITIES: utility   # only nvidia-smi (to read VRAM for the model fit check), no compute

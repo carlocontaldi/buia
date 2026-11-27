@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import os
 import time
+from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -24,8 +25,14 @@ def password() -> str:
     return os.getenv("BUIA_PASSWORD", "")
 
 
+@lru_cache(maxsize=1)
+def _derive_key(pwd: str, salt: str) -> bytes:
+    return hashlib.scrypt(pwd.encode(), salt=salt.encode(), n=2**14, r=8, p=1, dklen=32)
+
+
 def key() -> bytes:
-    return hashlib.sha256(b"buia-session\0" + password().encode()).digest()
+    # Install/update scripts provide a random stable salt; the fallback keeps manual installs compatible.
+    return _derive_key(password(), os.getenv("BUIA_SESSION_SALT") or "buia-session-v1")
 
 
 def sign(expiry: str) -> str:
