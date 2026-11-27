@@ -68,7 +68,7 @@ if ($Sd) {
     }
     New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
     $compose = @("--profile", "sd")
-    Write-Host "Download an image and a video model in the web UI (Models > Image and video models), or put the files named in SD_ARGS / SD_VIDEO_ARGS (.env) into $PSScriptRoot\sdmodels"
+    Write-Host "Download an image and a video model in the web UI (Settings > Image and video models), or put the files named in SD_ARGS / SD_VIDEO_ARGS (.env) into $PSScriptRoot\sdmodels"
 }
 
 # 5b. Optional: CogVideoX-2b. The flag lives in .env so that update.ps1 keeps rebuilding the service
@@ -84,7 +84,7 @@ if ($CogVideo) {
 if (@(Get-Content .env) -match '^COGVIDEO=on') {
     New-Item -ItemType Directory -Force -Path sdmodels | Out-Null
     $compose += @("--profile", "cogvideo")
-    Write-Host "Download CogVideoX 2B in the web UI (Models > Image and video models), then click Use. See README > CogVideoX before the first video."
+    Write-Host "Download CogVideoX 2B in the web UI (Settings > Image and video models), then click Use. See README > CogVideoX before the first video."
 }
 
 # 6. Build and start
@@ -114,4 +114,4 @@ if ($Tailscale) {
 }
 
 Write-Host ""
-Write-Host "BUIA is at http://127.0.0.1:8000  -  open Models to download and select a model."
+Write-Host "BUIA is at http://127.0.0.1:8000  -  open Settings to download and select a model."

@@ -57,14 +57,14 @@ The agent's notes live in `memory/`.
 Run this README's `docker compose`, test and lock-file commands in `core\`, where `docker-compose.yml` and `.env` are.
 
 Then open http://127.0.0.1:8000 and log in with the password the installer printed (`BUIA_PASSWORD` in `.env`; edit it there and run `docker compose up -d` to change it).
-Click **Models**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
+Click **Settings**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
 
 ## Web UI
 
-- **Models** downloads and selects chat models (Hugging Face repo, quant marked `fits` or not), then the image and video presets below them.
-- **Video dashboard** (button in Models) makes videos from a form with a progress bar, see [Video dashboard](#video-dashboard).
+- **Settings** shows this machine's GPU, RAM and disk, has the theme selector, downloads and selects chat models (Hugging Face repo, quant marked `fits` or not), then the image and video presets below them.
+- **Video dashboard** (header button, "Video" on a phone) makes videos from a form with a progress bar, see [Video dashboard](#video-dashboard).
 - **Think** lets the model reason before it answers (slower, uses more context). Off by default.
-- **Theme** (header selector): Plain (default, follows your operating system's light or dark setting), Light, Dark, Sepia, BUIA. Think and Theme are kept per browser.
+- **Theme** (in Settings, beside This machine): Plain (default, follows your operating system's light or dark setting), Light, Dark, Sepia, BUIA. Think and Theme are kept per browser.
 - **Chats** lists the chats saved as JSON files in `chats\` inside your buia folder (paged; an unreadable one can be downloaded for recovery). **Generated media** opens the saved image/video gallery. Files referenced by chats cannot be deleted until those chats are removed.
 
 ## Update
@@ -91,14 +91,14 @@ Use `serve`, never `funnel`: the agent has one shared password only and can writ
 ## Settings
 
 All settings are in `.env` (each is documented in `.env.example`). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
-`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
+`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/Projects/*.md`), `GPU_VRAM_MB` (only if Settings cannot read the GPU),
 `ALLOWED_HOSTS` (extra host names for the web UI, see Security), `BUIA_PASSWORD` (the web UI password), `WEB_ACCESS` (`on` by default, see Web access).
 
 ## Troubleshooting
 
 - `docker compose config` prints the resolved configuration and catches path or syntax mistakes.
 - `docker compose logs llama --tail 50` and `docker compose logs agent --tail 50` show what each container is doing.
-- Models panel says the GPU is not detected: set `GPU_VRAM_MB` in `.env`, then `docker compose up -d`.
+- Settings says the GPU is not detected: set `GPU_VRAM_MB` in `.env`, then `docker compose up -d`.
 
 ## Web access
 
@@ -113,7 +113,7 @@ The `searxng` image is the moving `latest` tag, unlike the llama image; to freez
 
 `.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\` (both in `core\`) and builds the `sd` service; the first build compiles for CUDA and takes a while.
 
-1. Open **Models** > **Image and video models**, **Download** a preset (Z-Image Turbo for images; Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video), then **Use**.
+1. Open **Settings** > **Image and video models**, **Download** a preset (Z-Image Turbo for images; Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video), then **Use**.
    Downloads come from Hugging Face into `sdmodels\`, resume after a cancel or a dropped connection and are checked against their sha256.
    A few seconds after **Use** the sd server restarts with that model (`sd-run.sh` watches `sdmodels\active-image.args` and `active-video.args`).
    - **Fit verdict.** Each model shows a verdict like the chat models (fits, tight, needs RAM offload, may not fit), with the reason as a tooltip in the check box.
@@ -140,7 +140,7 @@ A generation keeps running if you close the page, the phone sleeps or you press 
 
 ### Video dashboard
 
-**Models > Video dashboard** makes a video without the chat. Pick a downloaded video model (one not in use shows a **Use** button; the video server restarts and the form waits for it),
+The **Video dashboard** button in the header makes a video without the chat. Pick a downloaded video model (one not in use shows a **Use** button; the video server restarts and the form waits for it),
 write the prompt and press **Generate**.
 
 - The form follows the picked model. **Wan 2.1 / 2.2** (and any model `sd-video` runs): negative prompt, width, height, frames, frames per second, steps, cfg scale, sampler,
@@ -159,7 +159,7 @@ write the prompt and press **Generate**.
 ### CogVideoX 2B (optional second video engine)
 
 stable-diffusion.cpp cannot run CogVideoX, so `.\install.cmd -CogVideo` builds a separate `cogvideo` service (`core/cogvideo/`: Hugging Face Diffusers on PyTorch with CUDA;
-the image is several GB, the first build takes a while). It sets `COGVIDEO=on` in `.env`, so `update.cmd` rebuilds it too, and does not need `-Sd`. Then, in **Models**:
+the image is several GB, the first build takes a while). It sets `COGVIDEO=on` in `.env`, so `update.cmd` rebuilds it too, and does not need `-Sd`. Then, in **Settings**:
 
 1. **Download** *CogVideoX 2B* (about 13.8 GB from `zai-org/CogVideoX-2b` into `sdmodels\CogVideoX-2b\`, checked against sha256 like the other presets), then **Use**.
    From then on `generate_video` sends its jobs to the cogvideo service; **Use** on a Wan preset (or deleting CogVideoX) sends them back to `sd-video`, which is left alone
@@ -206,7 +206,7 @@ BUIA is MIT-licensed (`LICENSE`). It downloads or builds other software and mode
 
 - SearXNG (the `searxng` service) is AGPL-3.0. It runs unmodified in its own container, and BUIA only sends it search requests.
 - llama.cpp and stable-diffusion.cpp are MIT. The NVIDIA CUDA libraries inside the images are under NVIDIA's licence.
-- Each model has the licence its authors gave it, on its Hugging Face page. Some restrict how you may use the model or its output. The Models panel does not show licences, so read the model card before you download.
+- Each model has the licence its authors gave it, on its Hugging Face page. Some restrict how you may use the model or its output. Settings does not show licences, so read the model card before you download.
 
 ## Running tests
 

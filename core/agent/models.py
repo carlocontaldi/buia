@@ -167,7 +167,7 @@ async def resolve_model() -> str:
     if len(ready) == 1:  # only one installed: just use it
         save_settings({**load_settings(), "model": ready[0]})
         return ready[0]
-    raise RuntimeError("No model selected. Open Models, download one and select it.")
+    raise RuntimeError("No model selected. Open Settings, download one and select it.")
 
 
 async def unload_all(timeout: float = 60) -> list[str]:

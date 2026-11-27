@@ -43,7 +43,7 @@ start() {
   what=$1; shift
   gone=$(missing "$@")
   if [ -n "$gone" ]; then
-    [ "$waiting" = "$gone" ] || echo "sd-run: waiting for $gone (download it in the Models panel); not starting with $what yet"
+    [ "$waiting" = "$gone" ] || echo "sd-run: waiting for $gone (download it in Settings); not starting with $what yet"
     waiting=$gone
     return 1
   fi
