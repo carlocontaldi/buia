@@ -92,6 +92,8 @@ class SetupShTests(unittest.TestCase):
         self.assertIn("BUIA install", r.stdout)
         env = self.env_text()
         self.assertRegex(env, r"(?m)^BUIA_PASSWORD=[0-9a-f]{32}$")
+        self.assertRegex(env, r"(?m)^BUIA_SESSION_SALT=[0-9a-f]{32}$")
+        self.assertNotEqual(re.search(r"(?m)^BUIA_PASSWORD=(\w+)", env).group(1), re.search(r"(?m)^BUIA_SESSION_SALT=(\w+)", env).group(1))
         if os.getuid() == 0:
             self.assertNotRegex(env, r"(?m)^BUIA_UID=")
             self.assertIn("Running as root", r.stderr)
@@ -162,6 +164,18 @@ class SetupShTests(unittest.TestCase):
         self.assertFalse((self.repo / "BUIA.md").exists())
         self.assertIn("BUIA_PASSWORD in .env is empty", r.stderr)
         self.assertEqual(self.env_text().count("BUIA_PASSWORD="), 1, "an empty password is reported, not replaced")
+
+    def test_an_update_gives_an_old_install_a_session_salt_and_keeps_it_after(self):
+        shutil.copy(CORE / ".env.example", self.env)   # an .env from before the salt existed: a password, no salt line
+        with self.env.open("a", encoding="utf-8") as f:
+            f.write("BUIA_PASSWORD=mine\nBUIA_SESSION_SALT=\n")
+        self.assertEqual(self.run_setup().returncode, 0)
+        salt = re.findall(r"(?m)^BUIA_SESSION_SALT=(.*)$", self.env_text())
+        self.assertEqual(len(salt), 1, "the empty line is filled in, not repeated")
+        self.assertRegex(salt[0], r"^[0-9a-f]{32}$")
+        self.assertRegex(self.env_text(), r"(?m)^BUIA_PASSWORD=mine$")
+        self.assertEqual(self.run_setup().returncode, 0)
+        self.assertEqual(re.findall(r"(?m)^BUIA_SESSION_SALT=(.*)$", self.env_text()), salt, "a salt that is there stays: changing it logs everyone out")
 
     def test_an_old_nvidia_driver_is_pointed_at_llama_image(self):
         r = self.run_setup(FAKE_DRIVER="550.54.14")

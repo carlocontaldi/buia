@@ -94,14 +94,18 @@ main() {
   fi
 
   # 5b. Web UI password: a random one if .env has none, never overwritten
+  random_hex() { head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'; }   # 32 hex characters: no $ or # for Compose to trip over
   if ! grep -q '^BUIA_PASSWORD=' .env; then
-    pw=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')   # 32 hex characters: no $ or # for Compose to trip over
+    pw=$(random_hex)
     echo >> .env
     set_env BUIA_PASSWORD "$pw"
     say "Web UI password: $pw   (saved in .env as BUIA_PASSWORD; change it there)"
   elif ! grep -q '^BUIA_PASSWORD=.' .env; then
     warn "BUIA_PASSWORD in .env is empty, so nobody can log in. Put a password after the = and run this again."
   fi
+
+  # 5b-2. Session-signing salt: random and stable for this installation, added on an update too (the agent signs sessions with a key derived from the password and this salt)
+  grep -q '^BUIA_SESSION_SALT=.' .env || set_env BUIA_SESSION_SALT "$(random_hex)"
 
   # 5c. The agent container runs as you, so the files it writes in your buia folder are yours (docker-compose.yml: user:). As root it stays root.
   if [ "$(id -u)" -ne 0 ]; then
