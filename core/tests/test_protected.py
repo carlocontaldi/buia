@@ -161,6 +161,39 @@ class MemoryFilesTests(unittest.TestCase):
                 self.assertIn("inside note", prompt)  # the loader works, so the next line proves something
                 self.assertNotIn("outside secret", prompt)
 
+    def test_system_prompt_rejects_traversal_and_absolute_memory_patterns(self):
+        prompt = self.prompt_for(
+            {"outside.md": "OUTSIDE-SECRET", "buia/ok.md": "INSIDE-NOTE"},
+            ["../outside.md", "/outside.md", "C:/outside.md", "buia/../../outside.md"],
+        )
+        self.assertNotIn("OUTSIDE-SECRET", prompt)
+        self.assertNotIn("INSIDE-NOTE", prompt)
+
+    def test_system_prompt_supports_fixed_and_wildcard_memory_patterns(self):
+        prompt = self.prompt_for(
+            {"buia/BUIA.md": "FIXED-NOTE", "buia/memory/a.md": "TOP-NOTE",
+             "buia/memory/deep/b.md": "DEEP-NOTE"},
+            ["buia/BUIA.md", "buia/memory/*.md"],
+        )
+        self.assertIn("FIXED-NOTE", prompt)
+        self.assertIn("TOP-NOTE", prompt)
+        self.assertNotIn("DEEP-NOTE", prompt)
+
+    def test_system_prompt_supports_recursive_memory_patterns(self):
+        prompt = self.prompt_for(
+            {"buia/memory/a.md": "SHALLOW-NOTE", "buia/memory/deep/b.md": "DEEP-NOTE"},
+            ["buia/memory/**/*.md"],
+        )
+        self.assertIn("SHALLOW-NOTE", prompt)
+        self.assertIn("DEEP-NOTE", prompt)
+
+    def test_system_prompt_keeps_case_insensitive_root_matching(self):
+        prompt = self.prompt_for(
+            {"buia/BUIA.md": "ROOT-CASE-NOTE"},
+            ["BUIA/BUIA.md"],
+        )
+        self.assertIn("ROOT-CASE-NOTE", prompt)
+
     def test_read_memory_file_refuses_a_symlink_and_a_folder(self):
         with tempfile.TemporaryDirectory() as data:
             root = Path(data).resolve()

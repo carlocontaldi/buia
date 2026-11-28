@@ -821,6 +821,76 @@ def read_memory_file(path: Path) -> str | None:
             os.close(fd)
 
 
+def memory_pattern_parts(pattern: str) -> list[str] | None:
+    """Validate an environment memory glob and return its virtual-path segments."""
+    normalized = pattern.strip().replace("\\", "/")
+    if not normalized or normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        return None
+    parts = normalized.split("/")
+    if parts[0].casefold() not in ("buia", "vault") or any(part in ("", ".", "..") for part in parts):
+        return None
+    if any(any(char in part for char in '<>"|') for part in parts):
+        return None
+    return parts
+
+
+def memory_pattern_matches(pattern_parts: list[str], path_parts: tuple[str, ...]) -> bool:
+    """Match virtual path segments; '*' never crosses a folder and '**' crosses folders."""
+    memo = {}
+
+    def match(pi: int, si: int) -> bool:
+        key = (pi, si)
+        if key in memo:
+            return memo[key]
+        if pi == len(pattern_parts):
+            result = si == len(path_parts)
+        elif pattern_parts[pi] == "**":
+            result = match(pi + 1, si) or (si < len(path_parts) and match(pi, si + 1))
+        elif si < len(path_parts):
+            result = fnmatchcase(path_parts[si].casefold(), pattern_parts[pi].casefold()) and match(pi + 1, si + 1)
+        else:
+            result = False
+        memo[key] = result
+        return result
+
+    return match(0, 0)
+
+
+def memory_pattern_candidates(pattern: str):
+    """Enumerate a validated memory pattern without passing environment text to a path glob."""
+    parts = memory_pattern_parts(pattern)
+    if parts is None:
+        return
+    root = ROOTS[0] if parts[0].casefold() == "buia" else ROOTS[1]
+    pattern_parts = parts[1:]
+    max_depth = len(pattern_parts)
+    try:
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            relative_dir = Path(dirpath).relative_to(root)
+            depth = len(relative_dir.parts)
+            literal_prefix = []
+            for part in pattern_parts:
+                if any(char in part for char in "*?["):
+                    break
+                literal_prefix.append(part)
+            dirnames[:] = [
+                name for name in dirnames
+                if not (Path(dirpath) / name).is_symlink()
+                and (depth >= len(literal_prefix) or fnmatchcase(name.casefold(), literal_prefix[depth].casefold()))
+                and ("**" in pattern_parts or depth + 1 <= max_depth - 1)
+            ]
+            for name in filenames:
+                candidate = Path(dirpath) / name
+                try:
+                    rel = candidate.relative_to(root)
+                except ValueError:
+                    continue
+                if memory_pattern_matches(pattern_parts, tuple(rel.parts)):
+                    yield candidate
+    except (OSError, RuntimeError):
+        return
+
+
 def system_prompt() -> str:
     # date only: a changing clock in the prompt prefix would defeat llama-server's prompt cache
     parts = [BASE_PROMPT.format(today=datetime.now(TZ).strftime("%A %Y-%m-%d")) + (WEB_PROMPT if WEB else "")]
@@ -830,12 +900,12 @@ def system_prompt() -> str:
     for pattern in MEMORY_FILES:
         # case_sensitive=False: memory/projects and memory/Projects are one folder in Obsidian on Windows, and is_memory_file() compares case-insensitively too.
         # Only the folders the pattern names are listed, so the size of the vault or of the clone does not matter.
-        for f in sorted(DATA.glob(pattern, case_sensitive=False)):
+        for f in sorted(memory_pattern_candidates(pattern), key=lambda path: str(path).casefold()):
             try:
                 resolved = f.resolve()
             except (OSError, RuntimeError):
                 continue
-            if resolved in seen or not resolved.is_file() or not any(resolved.is_relative_to(root) for root in ROOTS):
+            if resolved in seen or not resolved.is_file() or protected(resolved) or not any(resolved.is_relative_to(root) for root in ROOTS):
                 continue  # a symlink or a ../ in a pattern must not lead out of buia/ and vault/
             seen.add(resolved)
             files.append(resolved)
