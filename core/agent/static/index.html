@@ -56,6 +56,9 @@
   .row .chat-title { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row small { color: var(--mute); }
   #theme { font: inherit; font-size: 14px; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 6px; }
+  #mtop { display: flex; flex-wrap: wrap; gap: 0 16px; align-items: flex-start; justify-content: space-between; }
+  #mmach { flex: 1 1 260px; min-width: 0; }
+  #themel { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 14px; }
   #login { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; background: var(--bg); }
   #pw { width: min(320px, 100%); font: inherit; color: inherit; background: var(--bot); border: 0; border-radius: 8px; padding: 8px; }
   /* Video panel: a form made from the model's parameters, a progress bar while a video is made */
@@ -71,7 +74,7 @@
   .brand, #welcome { display: none; }
   #login img { width: 96px; height: 96px; }
   /* BUIA theme, after the GitHub banner: near-black green, neon-green accents, pill buttons, round send button, "Hey!" start screen.
-     Header (56px) and status line (28px) get fixed heights so the Chats/Models panels can sit at top: 84px. */
+     Header (56px) and status line (28px) get fixed heights so the Chats/Settings panels can sit at top: 84px. */
   :root[data-theme="buia"] body { background:
     radial-gradient(ellipse 52rem 26rem at 108% -6%, #0b6b3099, transparent 68%),
     radial-gradient(ellipse 44rem 22rem at -12% 108%, #08522677, transparent 68%), var(--bg); }
@@ -119,6 +122,12 @@
   /* the header is too crowded for the mark on a phone: there it sits in the status line instead */
   @media (min-width: 480px) { :root[data-theme="buia"] .brand { display: flex; } :root[data-theme="buia"] #status::before { display: none; } }
   @media (min-width: 720px) { :root[data-theme="buia"] .brand b { display: inline; } }
+  /* Phone: five header buttons plus the model selector do not fit as they are, so "Video dashboard" shortens to "Video" and the header spacing tightens (the selector keeps about the room it had before) */
+  @media (max-width: 559px) {
+    .vlong { display: none; }
+    header, :root[data-theme="buia"] header { gap: 2px; padding-left: 8px; padding-right: 8px; }
+    header button.plain, :root[data-theme="buia"] header button.plain, :root[data-theme="buia"] #new { padding-left: 4px; padding-right: 4px; }
+  }
 </style>
 </head>
 <body>
@@ -134,13 +143,17 @@
   <button class="plain" id="chats">Chats</button>
   <select id="msel" title="Model"></select>
   <label id="thinkl" title="Let the model reason before it answers: slower, uses more context"><input type="checkbox" id="think"> Think</label>
-  <button class="plain" id="models">Models</button>
+  <button class="plain" id="models">Settings</button>
+  <button class="plain" id="vopen" aria-label="Video dashboard" title="Video dashboard">Video<span class="vlong"> dashboard</span></button>
   <button class="plain" id="new">New</button>
 </header>
 <div id="status" role="status" aria-live="polite">…</div>
 <div id="panel" hidden></div>
 <div id="mpanel" hidden>
-  <h3>This machine</h3><div id="mhw" class="muted">…</div>
+  <div id="mtop">
+    <div id="mmach"><h3>This machine</h3><div id="mhw" class="muted">…</div></div>
+    <label id="themel">Theme <select id="theme" title="Theme"></select></label>
+  </div>
   <h3>Installed</h3><div id="minst"></div>
   <h3>Download a model</h3>
   <input id="repo" placeholder="owner/repo on Hugging Face" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -150,7 +163,6 @@
   <div id="mres"></div>
   <h3>Image and video models</h3>
   <div id="sdinfo" class="muted"></div>
-  <div class="row"><button id="vopen">Video dashboard</button></div>
   <div id="sdmsg" class="bad" role="alert" aria-live="assertive"></div>
   <div id="sdlist"></div>
 </div>
@@ -207,10 +219,12 @@ const setTheme = t => {
 };
 let savedTheme = null;
 try { savedTheme = localStorage.getItem('buia.theme'); } catch (e) {}
-const themeSel = el('select', { id: 'theme', title: 'Theme', onchange: () => {
+const themeSel = $('theme');
+themeSel.append(...Object.entries(THEMES).map(([k, v]) => el('option', { value: k, textContent: v })));
+themeSel.onchange = () => {
   const t = setTheme(themeSel.value);
   try { if (t === 'plain') localStorage.removeItem('buia.theme'); else localStorage.setItem('buia.theme', t); } catch (e) {}
-} }, ...Object.entries(THEMES).map(([k, v]) => el('option', { value: k, textContent: v })));
+};
 themeSel.value = setTheme(savedTheme);
 
 // Split a buffer into complete SSE events; returns [events, remainder].
@@ -302,7 +316,7 @@ function renderSelect() {
 function renderStatus() {
   const cur = state.models.find(m => m.id === state.selected) || state.models.find(m => m.status === 'loaded');
   const dl = state.models.find(m => m.status === 'downloading');
-  let t = !state.models.length ? 'no model yet: open Models to download one' : !cur ? 'no model selected'
+  let t = !state.models.length ? 'no model yet: open Settings to download one' : !cur ? 'no model selected'
         : cur.status === 'loading' ? 'loading model…' : cur.status === 'loaded' ? 'model ready' : 'model idle (loads on first message)';
   if (dl) t += ' · downloading ' + short(dl.id) + (dl.total ? ' ' + Math.round(100 * (dl.done || 0) / dl.total) + '%' : '');
   $('status').textContent = t;
@@ -357,7 +371,7 @@ window.addEventListener('buia:sd-changed', refreshSd);  // fired by sd-custom.js
 function renderSd() {
   const run = k => k + ' server: ' + (sd.servers[k].up ? 'running ' + (sd.servers[k].model || 'with no model') : 'not running');
   $('sdinfo').textContent = run('image') + ' · ' + run('video') + ' · ' + size(sd.disk_free_mb) + ' free. A server restarts a few seconds after you click Use.'
-    + (sd.servers.image.up || sd.servers.video.up ? '' : ' Generation is installed with .\\install.cmd -Sd.');
+    + (sd.servers.image.up || sd.servers.video.up ? '' : ' Generation is installed with setup.cmd -Sd (Linux: setup.sh --sd).');
   const box = $('sdlist'); box.textContent = '';
   for (const m of sd.models) {
     const q = el('div', { class: 'q' }, el('div', { class: 'qh' }, el('b', { textContent: m.name }),
@@ -563,7 +577,6 @@ async function showChats() {
     if (!page.chats.length) list.append(el('div', { class: 'muted', textContent: 'No saved chats yet.' }));
     renderChatRows(list, page.chats, page.next_offset);
   } catch (e) { list.append(el('div', { class: 'bad', role: 'alert', textContent: e.message })); }
-  panel.append(el('div', { class: 'row' }, el('label', { htmlFor: 'theme', textContent: 'Theme' }), themeSel));
   panel.append(el('button', { class: 'plain', textContent: 'Log out', onclick: async () => { await fetch('/api/logout', { method: 'POST' }); newChat(); showLogin(); } }));
   panel.hidden = false;
 }
@@ -610,7 +623,7 @@ async function vload(rebuild = true) {  // models and servers, then the form (re
   if (!ready.some(m => m.active) && vsd.servers.video.up) sel.append(el('option', { value: '', textContent: 'The video server as started (flags from .env)' }));
   sel.value = ready.some(m => m.id === keep) || keep === '' && sel.querySelector('option[value=""]') ? keep : (ready.find(m => m.active) || ready[0] || { id: '' }).id;
   const up = vsd.servers.video;
-  $('vinfo').textContent = !sel.options.length ? 'No video model is downloaded yet: download one in the Models panel first.'
+  $('vinfo').textContent = !sel.options.length ? 'No video model is downloaded yet: download one in Settings first.'
     : !vactive() ? 'This model is not in use. Use restarts the video server with it (a few seconds, then it loads).'
     : up.up ? 'Video server running ' + (up.model || '') : 'The video server is not running (or still loading the model).';
   if (sel.options.length) { if (!vactive()) $('vinfo').append(' ', el('button', { class: 'plain', textContent: 'Use', onclick: vuse })); if (rebuild) await vparams(false); else vbusy(false); }
@@ -676,7 +689,7 @@ $('vprompt').oninput = vsave;
 $('vreset').onclick = () => { try { localStorage.removeItem(vkey()); } catch (e) {} vparams(true).catch(e => { $('vmsg').textContent = e.message; }); };
 $('vmodel').onchange = () => { if (!vwatch) vload().catch(e => { $('vmsg').textContent = e.message; }); };
 $('vclose').onclick = () => { vpanel.hidden = true; clearTimeout(vsw); };
-$('vopen').onclick = async () => {  // from the Models panel: the header has no room for one more button on a phone
+$('vopen').onclick = async () => {  // the header button
   panel.hidden = true; mpanel.hidden = true; gpanel.hidden = true; vpanel.hidden = false;
   clearTimeout(vsw);
   try {

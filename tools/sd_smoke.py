@@ -1,7 +1,7 @@
-r"""First small video job against sd-server (native sdcpp API). Run it inside the agent container (PowerShell, from the core folder):
-    docker compose cp ..\tools\sd_smoke.py agent:/tmp/sd_smoke.py
+r"""First small video job against sd-server (native sdcpp API). Run it inside the agent container (from the core folder, in PowerShell or a Linux shell):
+    docker compose cp ../tools/sd_smoke.py agent:/tmp/sd_smoke.py
     docker compose exec -T agent python /tmp/sd_smoke.py 256 256 9 10      # width height frames steps
-Saves /data/buia/generated/<YYYYMMDD-HHMMSS>-sd-smoke-<hex>.<format>  (= generated\ in your buia folder on Windows), named like the
+Saves /data/buia/generated/<YYYYMMDD-HHMMSS>-sd-smoke-<hex>.<format>  (= generated/ in your buia folder), named like the
 assistant's own videos so that the Generated media panel lists it.
 Request fields follow examples/server/api.md at master-920-2f88688; omitted fields keep the server defaults."""
 import base64, os, secrets, sys, time

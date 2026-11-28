@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:   # the release workflow runs the same checks before it publishes
 
 permissions:
   contents: read
@@ -35,14 +36,68 @@ jobs:
         run: python -c "import fastapi, httpx"
       - name: Run the tests
         run: python -m unittest discover -s tests -v
-      # The launchers run the scripts with Windows PowerShell (powershell, not pwsh): parse them with it.
+      # setup.sh is the Linux installer and updater; the runner has ShellCheck. Its behaviour is tested in tests/test_setup_sh.py.
+      - name: Lint the Linux setup script
+        if: runner.os == 'Linux'
+        run: |
+          bash -n ../setup.sh
+          shellcheck ../setup.sh
+      # setup.cmd runs setup.ps1 with Windows PowerShell (powershell, not pwsh): parse it with that. Its behaviour is tested in tests/test_setup_ps1.py.
       - name: Parse the PowerShell scripts
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          foreach ($path in @('install.ps1', 'update.ps1')) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path), [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) { throw ($errors | Out-String) }
-          }
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'setup.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+
+  # The compose file and the agent image. The runner has no GPU, so the agent is started alone with its GPU reservation dropped.
+  compose:
+    name: compose file and agent image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the compose file with every profile on
+        run: docker compose --profile sd --profile cogvideo config --quiet
+      # The agent runs as the runner's own user, as it does on a Linux machine after setup.sh (BUIA_UID and BUIA_GID in .env).
+      - name: Build the agent image and start it alone
+        run: |
+          echo "BUIA_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "BUIA_GID=$(id -g)" >> "$GITHUB_ENV"
+          printf 'services:\n  agent:\n    deploy: !reset null\n' > "$RUNNER_TEMP/no-gpu.yml"
+          BUIA_UID=$(id -u) BUIA_GID=$(id -g) docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" up -d --build --no-deps agent
+      # llama is not running, so /api/health answers 503 {"ready": false, "version": ...}: the version proves the image has VERSION and imports every module.
+      - name: Check the health answer and the logo and icon mounts
+        run: |
+          set -eu
+          base=http://127.0.0.1:8000
+          for _ in $(seq 1 30); do
+            body=$(curl -s "$base/api/health" || true)
+            case "$body" in *'"version"'*) break ;; esac
+            sleep 2
+          done
+          echo "$body"
+          want=$(tr -d '[:space:]' < agent/VERSION)
+          python3 -c 'import json, sys; d = json.loads(sys.argv[1]); assert d["version"] == sys.argv[2], d' "$body" "$want"
+          for f in buia-logo.png buia-icon-64.png buia-logo-256.png; do
+            got=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$base/$f")
+            echo "$f: $got"
+            test "$got" = "200 image/png"
+          done
+      # What the files in the buia folder look like on a Linux host: made by the agent, owned by you.
+      - name: Check that the agent runs as the runner user and writes files that user owns
+        run: |
+          set -eu
+          docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" exec -T agent sh -c 'id -u; touch /data/buia/.agent-write-test'
+          test "$(stat -c %u ../.agent-write-test)" = "$(id -u)"
+          rm ../.agent-write-test
+      - name: Show the agent log
+        if: failure()
+        run: docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" logs agent

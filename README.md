@@ -25,79 +25,97 @@ It generates text, images and videos, reads and writes your notes through file t
 | `llama` | always | llama.cpp server in router mode: the chat models, one in VRAM at a time |
 | `agent` | always | the FastAPI agent and the web UI on `127.0.0.1:8000` (the only published port) |
 | `searxng` | always | the search engine behind `web_search` (no published port) |
-| `sd`, `sd-video` | `-Sd` | stable-diffusion.cpp: image generation and video generation (Wan) |
-| `cogvideo` | `-CogVideo` | CogVideoX 2B video generation (Diffusers, PyTorch) |
+| `sd`, `sd-video` | `-Sd` / `--sd` | stable-diffusion.cpp: image generation and video generation (Wan) |
+| `cogvideo` | `-CogVideo` / `--cogvideo` | CogVideoX 2B video generation (Diffusers, PyTorch) |
 
 ## Requirements
 
-- Windows 11, Docker Desktop (WSL2 backend) with NVIDIA GPU support
-- NVIDIA driver recent enough for CUDA 13 (the compose file uses `server-cuda13`, pinned by digest to a known working build; for an older driver use `server-cuda` and drop the digest)
+- An NVIDIA GPU, and either
+  - **Windows 11** with Docker Desktop (WSL2 backend) and its NVIDIA GPU support, or
+  - **Linux** with [Docker Engine](https://docs.docker.com/engine/install/) and its Compose plugin (`docker compose`), the NVIDIA driver and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Your user must be in the `docker` group (`sudo usermod -aG docker $USER`, then log in again). On Ubuntu use Docker Engine from docker.com's apt repository, or Ubuntu's `docker.io` together with `docker-compose-v2`; not the snap package, which confines Docker and is untested here. SELinux hosts (Fedora, RHEL), rootless Docker and Podman are untested.
+- NVIDIA driver recent enough for CUDA 13: 580 or newer on Linux (the compose file uses `server-cuda13`, pinned by digest to a known working build; for an older driver put `LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda` in `core/.env`)
 - Git. Tailscale if you want phone access.
-- For image and video generation (`-Sd`): the sd image is built for compute capability 12.0 (RTX 50 series, CUDA 12.8). For another GPU, set `CUDA_ARCHITECTURES` under `sd` in `core\docker-compose.yml` (`nvidia-smi --query-gpu=compute_cap --format=csv,noheader` prints it; drop the dot, 8.9 is `89`) and run `.\update.cmd`. The chat models and the CogVideoX service are not tied to that value.
+- For image and video generation (`-Sd` / `--sd`): the sd image is built for one GPU architecture, 12.0 by default (RTX 50 series, CUDA 12.8). `setup.cmd -Sd` (Linux: `./setup.sh --sd`) writes yours (from `nvidia-smi`) to `core/.env` as `SD_CUDA_ARCHITECTURES`. If it cannot read it, set it there yourself (`nvidia-smi --query-gpu=compute_cap --format=csv,noheader` prints it; drop the dot, 8.9 is `89`) and run the setup script again. The chat models and the CogVideoX service are not tied to that value.
 - Developed and measured on one machine: RTX 5050 Laptop GPU (8 GB VRAM), 32 GB RAM. The image and video presets assume that size.
 
 ## Install
 
+Windows (PowerShell):
+
 ```powershell
 git clone https://github.com/carlocontaldi/buia.git $HOME\buia
 cd $HOME\buia
-.\install.cmd              # add -Tailscale to expose it to your tailnet, -Sd for image/video generation, -CogVideo for the CogVideoX video model
+.\setup.cmd                # add -Tailscale to expose it to your tailnet, -Sd for image/video generation, -CogVideo for the CogVideoX video model
 ```
 
-The buia folder is the repository and the folder the agent reads and writes (`BUIA_PATH`). `install.cmd` runs `core\install.ps1`: it checks Docker and GPU access,
-creates `core\.env` from `.env.example` and `BUIA.md` from `templates/BUIA.md`, builds and starts the core, and waits until it answers.
-It never overwrites an existing `.env` or `BUIA.md`. `BUIA_PATH` and `VAULT_PATH` in `.env` are optional: the buia folder defaults to the folder above `core`, the vault to `.vault\` inside it.
+Linux:
 
-The agent's file tools refuse `core\` (it holds `.env` and the scripts and is recognised by `install.ps1` and `docker-compose.yml`, so keep `.env` there, not next to `BUIA.md`),
+```bash
+git clone https://github.com/carlocontaldi/buia.git ~/buia
+cd ~/buia
+./setup.sh                 # add --tailscale to expose it to your tailnet, --sd for image/video generation, --cogvideo for the CogVideoX video model
+```
+
+The buia folder is the repository and the folder the agent reads and writes (`BUIA_PATH`). `setup.cmd` runs `core/setup.ps1`, `setup.sh` is the same on Linux. One script installs and updates: with no `core/.env` yet it installs, otherwise it updates (see Update). Installing checks Docker and GPU access,
+creates `core/.env` from `.env.example` (with a random web UI password and session salt) and `BUIA.md` from `templates/BUIA.md`, builds and starts the core, and waits until it answers.
+It never overwrites an existing `.env` or `BUIA.md`. `BUIA_PATH` and `VAULT_PATH` in `.env` are optional: the buia folder defaults to the folder above `core`, the vault to `.vault/` inside it.
+On Linux, run `setup.sh` as your normal user, not with `sudo`: it puts your user and group ids in `.env` (`BUIA_UID`, `BUIA_GID`), so the agent container runs as you and the files it writes in your buia folder (`chats/`, `generated/`, `memory/`) are yours, not root's.
+
+The agent's file tools refuse `core/` (it holds `.env` and the scripts and is recognised by `setup.ps1` and `docker-compose.yml`, so keep `.env` there, not next to `BUIA.md`),
 `.git`, `templates/` and `README.md` at the top of the buia folder (they belong to the repo), `.obsidian/` (plugins there are code Obsidian runs) and `.vault/`
 (read it as `vault/`, which is mounted read-only; set `VAULT_PATH` to another folder, such as an Obsidian vault, to read that instead).
 The agent's notes live in `memory/`.
 
-Run this README's `docker compose`, test and lock-file commands in `core\`, where `docker-compose.yml` and `.env` are.
+Run this README's `docker compose`, test and lock-file commands in `core/`, where `docker-compose.yml` and `.env` are.
 
-Then open http://127.0.0.1:8000 and log in with the password the installer printed (`BUIA_PASSWORD` in `.env`; edit it there and run `docker compose up -d` to change it).
-Click **Models**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
+Then open http://127.0.0.1:8000 and log in with the password the setup script printed (`BUIA_PASSWORD` in `.env`; edit it there and run `docker compose up -d` to change it).
+Click **Settings**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
 
 ## Web UI
 
-- **Models** downloads and selects chat models (Hugging Face repo, quant marked `fits` or not), then the image and video presets below them.
-- **Video dashboard** (button in Models) makes videos from a form with a progress bar, see [Video dashboard](#video-dashboard).
+- **Settings** shows this machine's GPU, RAM and disk, has the theme selector, downloads and selects chat models (Hugging Face repo, quant marked `fits` or not), then the image and video presets below them.
+- **Video dashboard** (header button, "Video" on a phone) makes videos from a form with a progress bar, see [Video dashboard](#video-dashboard).
 - **Think** lets the model reason before it answers (slower, uses more context). Off by default.
-- **Theme** (header selector): Plain (default, follows your operating system's light or dark setting), Light, Dark, Sepia, BUIA. Think and Theme are kept per browser.
-- **Chats** lists the chats saved as JSON files in `chats\` inside your buia folder (paged; an unreadable one can be downloaded for recovery). **Generated media** opens the saved image/video gallery. Files referenced by chats cannot be deleted until those chats are removed.
+- **Theme** (in Settings, beside This machine): Plain (default, follows your operating system's light or dark setting), Light, Dark, Sepia, BUIA. Think and Theme are kept per browser.
+- **Chats** lists the chats saved as JSON files in `chats/` inside your buia folder (paged; an unreadable one can be downloaded for recovery). **Generated media** opens the saved image/video gallery. Files referenced by chats cannot be deleted until those chats are removed.
 
 ## Update
 
 ```powershell
 cd $HOME\buia
-.\update.cmd               # git pull + rebuild + restart
-.\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
+.\setup.cmd                # finds core\.env, so: git pull + rebuild + restart
+.\setup.cmd -Llama         # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
+.\setup.cmd -NoPull        # rebuild without pulling (local commits, or a copy that is not a git clone)
 ```
+
+On Linux it is `./setup.sh`, with `--llama` and `--no-pull`. An update pulls (`git pull --ff-only`), rebuilds what is installed (`sd` if `core/sdcpp/` exists, `cogvideo` if `COGVIDEO=on`), restarts, and adds to `.env` what a newer version needs and it lacks (a web UI password, the session salt). It never changes a value that is there.
 
 The release number is in `core/agent/VERSION` and in the answer of `http://127.0.0.1:8000/api/health`; give it when you report a problem.
 
 ## Phone (Tailscale)
 
-`.\install.cmd -Tailscale`, or by hand `tailscale serve --bg 8000`; open the `https://...ts.net` address from `tailscale serve status` on a phone signed in to the same tailnet.
+`.\setup.cmd -Tailscale` (Linux: `./setup.sh --tailscale`), or by hand `tailscale serve --bg 8000`; open the `https://...ts.net` address from `tailscale serve status` on a phone signed in to the same tailnet.
 Use `serve`, never `funnel`: the agent has one shared password only and can write notes. Everyone on your tailnet can reach the login page, so limit that to your own devices in the Tailscale access rules.
 
 ## What lives where
 
 | In git | Not in git (git-ignored or kept elsewhere, never committed) |
 |---|---|
-| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `.github/workflows/`, `install.cmd`, `update.cmd` | `core/.env` (token, password, optional paths), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
+| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `.github/workflows/`, `setup.cmd`, `setup.sh` | `core/.env` (token, password, optional paths), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
 
 ## Settings
 
 All settings are in `.env` (each is documented in `.env.example`). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
-`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/Projects/*.md`), `GPU_VRAM_MB` (only if the Models panel cannot read the GPU),
+`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/projects/*.md`), `GPU_VRAM_MB` (only if Settings cannot read the GPU),
 `ALLOWED_HOSTS` (extra host names for the web UI, see Security), `BUIA_PASSWORD` (the web UI password), `WEB_ACCESS` (`on` by default, see Web access).
 
 ## Troubleshooting
 
 - `docker compose config` prints the resolved configuration and catches path or syntax mistakes.
 - `docker compose logs llama --tail 50` and `docker compose logs agent --tail 50` show what each container is doing.
-- Models panel says the GPU is not detected: set `GPU_VRAM_MB` in `.env`, then `docker compose up -d`.
+- Settings says the GPU is not detected: set `GPU_VRAM_MB` in `.env`, then `docker compose up -d`.
+- Linux, `could not select device driver "nvidia"` or no GPU in the containers: install the NVIDIA Container Toolkit, then `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`. `docker run --rm --gpus all ubuntu nvidia-smi` must print your GPU.
+- Linux, the agent cannot save chats, notes or models (`Permission denied`): those folders belong to root, because Docker ran as root before `BUIA_UID` was in `.env`. `./setup.sh` prints the `sudo chown -R` command for the folders it finds.
 
 ## Web access
 
@@ -110,11 +128,11 @@ The `searxng` image is the moving `latest` tag, unlike the llama image; to freez
 
 ## Image and video generation (optional)
 
-`.\install.cmd -Sd` clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp\`, creates `sdmodels\` (both in `core\`) and builds the `sd` service; the first build compiles for CUDA and takes a while.
+`.\setup.cmd -Sd` (Linux: `./setup.sh --sd`) clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp/`, creates `sdmodels/` (both in `core/`) and builds the `sd` service; the first build compiles for CUDA and takes a while.
 
-1. Open **Models** > **Image and video models**, **Download** a preset (Z-Image Turbo for images; Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video), then **Use**.
-   Downloads come from Hugging Face into `sdmodels\`, resume after a cancel or a dropped connection and are checked against their sha256.
-   A few seconds after **Use** the sd server restarts with that model (`sd-run.sh` watches `sdmodels\active-image.args` and `active-video.args`).
+1. Open **Settings** > **Image and video models**, **Download** a preset (Z-Image Turbo for images; Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video), then **Use**.
+   Downloads come from Hugging Face into `sdmodels/`, resume after a cancel or a dropped connection and are checked against their sha256.
+   A few seconds after **Use** the sd server restarts with that model (`sd-run.sh` watches `sdmodels/active-image.args` and `active-video.args`).
    - **Fit verdict.** Each model shows a verdict like the chat models (fits, tight, needs RAM offload, may not fit), with the reason as a tooltip in the check box.
      Streamed sd presets use the resident compute-buffer estimate (or `--max-vram` when set), not the file size; CogVideoX uses the transformer + VAE size;
      a single-file checkpoint adds its exact weights, counted from the safetensors header. The compute-buffer part is an estimate per family, not derived from the header.
@@ -123,23 +141,23 @@ The `searxng` image is the moving `latest` tag, unlike the llama image; to freez
      FLUX.1 schnell (GGUF, found by file name, reusing the preset's companion files and flags), and single-file SD 1.x or SDXL checkpoints (`.safetensors`, found by their tensor names
      whatever the file is called; distilled ones such as Turbo or Lightning get a warning because the flags are for standard models). CogVideoX has no customs: its service reads one fixed folder.
      Paths containing whitespace or shell wildcards (`*?[]`) are refused because the sd runner passes model flags as shell words.
-     Customs are saved in `sdmodels\custom.json` and use the same Download / Use / Delete buttons.
-   - **By hand.** Put the files into `sdmodels\`, set `SD_ARGS` / `SD_VIDEO_ARGS` in `.env` as in `.env.example`, then
+     Customs are saved in `sdmodels/custom.json` and use the same Download / Use / Delete buttons.
+   - **By hand.** Put the files into `sdmodels/`, set `SD_ARGS` / `SD_VIDEO_ARGS` in `.env` as in `.env.example`, then
      `docker compose --profile sd up -d`. They apply while no model has been chosen with Use.
 2. The sd server runs one model at a time (an image model cannot make videos and the other way round), hence two servers.
 3. Ask the assistant for an image or a video. Before each job the chat model is unloaded to free VRAM; it loads again on your next message.
-   Results are saved in `generated\` inside your buia folder and shown inline in the chat.
+   Results are saved in `generated/` inside your buia folder and shown inline in the chat.
 
-`tools\sd_smoke.py` runs one small video job against the sd server to check it end to end and saves it in `generated\` (instructions at the top of the file).
-`.\update.cmd` rebuilds the sd service too once `sdcpp\` exists.
+`tools/sd_smoke.py` runs one small video job against the sd server to check it end to end and saves it in `generated/` (instructions at the top of the file).
+The setup script (`.\setup.cmd`, or `./setup.sh` on Linux) rebuilds the sd service too once `sdcpp/` exists.
 
 A generation keeps running if you close the page, the phone sleeps or you press Stop. The result is added to the chat when it is done
 (reopen the chat to see it), and the chat accepts the next message after that. Each service keeps its newest 60 MB of Docker logs (3 files of 20 MB);
-`docker compose logs sd | findstr /c:"compute buffer"` shows the buffer sizes of the last job.
+`docker compose logs sd | findstr /c:"compute buffer"` (Linux: `docker compose logs sd | grep "compute buffer"`) shows the buffer sizes of the last job.
 
 ### Video dashboard
 
-**Models > Video dashboard** makes a video without the chat. Pick a downloaded video model (one not in use shows a **Use** button; the video server restarts and the form waits for it),
+The **Video dashboard** button in the header makes a video without the chat. Pick a downloaded video model (one not in use shows a **Use** button; the video server restarts and the form waits for it),
 write the prompt and press **Generate**.
 
 - The form follows the picked model. **Wan 2.1 / 2.2** (and any model `sd-video` runs): negative prompt, width, height, frames, frames per second, steps, cfg scale, sampler,
@@ -151,32 +169,32 @@ write the prompt and press **Generate**.
   so its sections are a layout, not shares of the time. CogVideoX reports its steps in the job. stable-diffusion.cpp's job answer has no progress, only its output has,
   so `sd-run.sh` also copies that to the `sdlogs` volume (`active-video.log`, emptied at every server start and past 10 MB) and the agent reads it from there (read-only). Without the volume the bar is not filled and shows what is happening and the elapsed time.
 - One video at a time: the chat refuses new messages while it runs (its model would load next to the video model), and the chat model is unloaded before the job as for `generate_video`.
-  Reloading the page shows the running job again. The video is saved in `generated\`, not added to a chat.
+  Reloading the page shows the running job again. The video is saved in `generated/`, not added to a chat.
 - **Cancel** under the bar ends the job and frees the chat. CogVideoX stops at once. stable-diffusion.cpp's server cannot interrupt a generating job,
   so the video server is restarted instead (`sd-run.sh`, a few seconds; the model loads again on the next job). A video that finishes at the same moment is kept.
 
 ### CogVideoX 2B (optional second video engine)
 
-stable-diffusion.cpp cannot run CogVideoX, so `.\install.cmd -CogVideo` builds a separate `cogvideo` service (`core/cogvideo/`: Hugging Face Diffusers on PyTorch with CUDA;
-the image is several GB, the first build takes a while). It sets `COGVIDEO=on` in `.env`, so `update.cmd` rebuilds it too, and does not need `-Sd`. Then, in **Models**:
+stable-diffusion.cpp cannot run CogVideoX, so `.\setup.cmd -CogVideo` (Linux: `./setup.sh --cogvideo`) builds a separate `cogvideo` service (`core/cogvideo/`: Hugging Face Diffusers on PyTorch with CUDA;
+the image is several GB, the first build takes a while). It sets `COGVIDEO=on` in `.env`, so the setup script rebuilds it too, and does not need `-Sd`. Then, in **Settings**:
 
-1. **Download** *CogVideoX 2B* (about 13.8 GB from `zai-org/CogVideoX-2b` into `sdmodels\CogVideoX-2b\`, checked against sha256 like the other presets), then **Use**.
+1. **Download** *CogVideoX 2B* (about 13.8 GB from `zai-org/CogVideoX-2b` into `sdmodels/CogVideoX-2b/`, checked against sha256 like the other presets), then **Use**.
    From then on `generate_video` sends its jobs to the cogvideo service; **Use** on a Wan preset (or deleting CogVideoX) sends them back to `sd-video`, which is left alone
    in between. Only one video model is in use at a time; image generation is not affected.
 2. One format: **720x480, 49 frames at 8 fps (6 s)**, English prompts of at most 226 tokens. The assistant's `width`, `height` and `frames` arguments
    are ignored; `steps` go from 10 to 50 (default 50, the model card's value).
 3. Each video runs in a fresh process, so the service holds no VRAM or RAM while idle. The 9.5 GB T5 text encoder runs on the CPU first and is freed, then the
-   3.4 GB transformer and the VAE take turns on the GPU. That needs about 12 GB of free RAM inside Docker Desktop's WSL2 VM, which by default gets half of your RAM
-   (shared with the other containers). If a job ends with "killed: probably out of memory", raise `memory=` in `%UserProfile%\.wslconfig` (`[wsl2]` section) and run `wsl --shutdown`.
+   3.4 GB transformer and the VAE take turns on the GPU. That needs about 12 GB of free RAM: on Windows inside Docker Desktop's WSL2 VM, which by default gets half of your RAM
+   (shared with the other containers); on Linux the host's. If a job ends with "killed: probably out of memory", on Windows raise `memory=` in `%UserProfile%\.wslconfig` (`[wsl2]` section) and run `wsl --shutdown`; on Linux close other programs.
 4. **Measured on the 8 GB laptop:** about 200-250 s per video at 10 steps (720x480, 49 frames); peak VRAM and RAM not yet recorded (timeout 1 hour). To check it, run
-   `docker compose cp ..\tools\sd_smoke.py agent:/tmp/sd_smoke.py` and
+   `docker compose cp ../tools/sd_smoke.py agent:/tmp/sd_smoke.py` and
    `docker compose exec -T -e SD_URL=http://cogvideo:1234 agent python /tmp/sd_smoke.py 720 480 49 10` while
    `docker compose logs -f cogvideo` shows `step i/N`. If it is too slow, give the assistant fewer steps or lower the default (`COG_DEFAULT_STEPS` in `core/agent/agent.py`).
 
 ## Security
 
 The web UI is protected by one password (`BUIA_PASSWORD` in `.env`): every API call except the login and the health check needs the session cookie a login sets (HttpOnly, `SameSite=Strict`,
-valid 30 days, signed with a key derived from the password, so changing the password logs everyone out). Five wrong passwords in a row lock the login for a minute.
+valid 30 days, signed with a key derived from the password and a random per-installation salt, `BUIA_SESSION_SALT` in `.env`, so changing either logs everyone out). Five wrong passwords in a row lock the login for a minute.
 Without a password nobody can log in. It is meant for `localhost` and your own tailnet, not the open internet. Notes, search results and web pages can contain text that
 tries to give the model orders (prompt injection). The prompt tells the model to treat file text as data, but that is only a request, so the limits that matter are in the code:
 
@@ -197,10 +215,19 @@ Not covered:
 - The model chooses the words of a search, so a page that tells it to search for something from your notes sends those words to the search engines
   (the page's author does not see them). Turn `WEB_ACCESS` off if that matters to you.
 - If Obsidian has plugins that run code found in notes (Dataview JS, Templater), a note the agent wrote could run when you open it. Keep those off for the folders the agent writes to.
+- Except for the agent on Linux (`BUIA_UID` / `BUIA_GID`, set by `setup.sh`), no service sets a `user:`, and the agent and cogvideo images have no `USER` line, so their processes run as root inside the container (on Windows, and the other services on Linux). What they can reach is limited to what `docker-compose.yml` mounts into them.
+
+## Licences
+
+BUIA is MIT-licensed (`LICENSE`). It downloads or builds other software and models on your machine and ships none of them:
+
+- SearXNG (the `searxng` service) is AGPL-3.0. It runs unmodified in its own container, and BUIA only sends it search requests.
+- llama.cpp and stable-diffusion.cpp are MIT. The NVIDIA CUDA libraries inside the images are under NVIDIA's licence.
+- Each model has the licence its authors gave it, on its Hugging Face page. Some restrict how you may use the model or its output. Settings does not show licences, so read the model card before you download.
 
 ## Running tests
 
-Use Python 3.12, install the agent's hash-pinned dependencies and run the suite from `core\`:
+Use Python 3.12, install the agent's hash-pinned dependencies and run the suite from `core/`:
 
 ```powershell
 python -m pip install --no-deps --require-hashes -r agent/requirements.txt
@@ -208,9 +235,9 @@ python -m unittest discover -s tests -v
 ```
 
 The API tests need FastAPI and HTTPX, so install the locked agent requirements first: otherwise those tests are skipped and hide missing coverage (`--no-deps`: the lock already lists every package).
-GitHub Actions (`.github/workflows/tests.yml`) runs the suite this way on Linux and Windows for every push to `main` and every pull request, and on Windows also parses `install.ps1` and `update.ps1` with Windows PowerShell. `test_sd_run.py` exercises the Linux container supervisor and is skipped on Windows.
+GitHub Actions (`.github/workflows/tests.yml`) runs the suite this way on Linux and Windows for every push to `main` and every pull request, on Windows also parses `setup.ps1` with Windows PowerShell, and on Linux runs ShellCheck on `setup.sh`. `test_setup_sh.py` and `test_setup_ps1.py` run the real setup scripts against stand-ins for docker, git and nvidia-smi (the PowerShell one needs `pwsh` or, on Windows, `powershell`, and a free port 8000). A separate Linux job validates `docker-compose.yml` with every profile on and starts the agent image alone (no GPU), checking `/api/health` and the logo and icon mounts. `test_sd_run.py` exercises the Linux container supervisor and is skipped on Windows.
 In the agent container only `test_sd_job.py` can run from a copied `tests` directory, because the other tests locate source files relative to the repository layout.
-Compose reports agent readiness through `/api/health` (HTTP 503 until llama-server is ready); the installer and updater wait up to two minutes and, if it is not reached, warn and print the service status and recent logs.
+Compose reports agent readiness through `/api/health` (HTTP 503 until llama-server is ready); the setup script waits up to two minutes and, if it is not reached, warn and print the service status and recent logs.
 
 ## Updating dependencies
 
@@ -234,5 +261,7 @@ docker compose up -d --build cogvideo
 (`--allow-unsafe` keeps `setuptools` in the file: torch needs it and `python:3.12-slim` does not ship it.) The file in the repo was generated from pip's resolution plus PyPI's hashes instead.
 It has been built and run on the 8 GB laptop: a finished video (timing in the CogVideoX section).
 
-The base image tag `python:3.12-slim` in `agent/Dockerfile` can still move on a rebuild. To freeze it, run the two commands in the comment at the top of
-the Dockerfile and replace the tag with the printed `python@sha256:...` value (the llama image is already pinned that way).
+The base image `python:3.12-slim` (`agent/Dockerfile` and `cogvideo/Dockerfile`) and the `searxng/searxng` image (`docker-compose.yml`) are pinned by digest, like the
+llama image, so a rebuild starts from the same ones. To move one on purpose, replace its digest with the `Digest:` line of `docker buildx imagetools inspect <image>`
+(in both Dockerfiles together) and rebuild. The `sd` image is the exception: stable-diffusion.cpp's own Dockerfile starts from two `nvidia/cuda` tags and installs
+packages with apt, and this repository does not pin them.

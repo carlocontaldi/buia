@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -36,9 +37,19 @@ from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
-DATA = Path(os.getenv("DATA_DIR", "/data")).resolve()
+
+def _safe_data_root() -> Path:
+    allowed_base = Path("/data").resolve()
+    configured = Path(os.getenv("DATA_DIR", "/data")).resolve()
+    try:
+        configured.relative_to(allowed_base)
+    except ValueError:
+        return allowed_base
+    return configured
+
+DATA = _safe_data_root()
 ROOTS = [(DATA / "buia").resolve(), (DATA / "vault").resolve()]
-MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md").split(",") if p.strip()]
+MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md").split(",") if p.strip()]
 try:
     VERSION = (Path(__file__).with_name("VERSION")).read_text(encoding="utf-8").strip()  # the release number, also the git tag (v0.1.0)
 except OSError:
@@ -97,7 +108,7 @@ def protected(p: Path) -> bool:
     """True for everything inside a protected top-level folder of either root:
     - .obsidian: plugins/ and community-plugins.json there are code that Obsidian runs on your PC;
     - any clone of this repo, whatever it is called: it holds .env (HF token) and the scripts you run. A clone is recognised by
-      its install.ps1 and docker-compose.yml, so a renamed folder is still covered;
+      its setup.ps1 and docker-compose.yml, so a renamed folder is still covered;
     - .git, templates/ and README.md at the top of buia/ (REPO_ENTRIES): buia/ is the repo root, so they are the repo's. So is .vault/,
       the default vault folder, which is read-only as vault/ and must not be writable here.
     A Windows bind mount treats .OBSIDIAN and .obsidian (or MEMORY and memory) as one folder while resolve() does not,
@@ -107,7 +118,7 @@ def protected(p: Path) -> bool:
             parts = p.relative_to(r).parts
             if parts:
                 top = r / parts[0]
-                if parts[0].casefold() == ".obsidian" or ((top / "install.ps1").exists() and (top / "docker-compose.yml").exists()):
+                if parts[0].casefold() == ".obsidian" or ((top / "setup.ps1").exists() and (top / "docker-compose.yml").exists()):
                     return True
                 if r == ROOTS[0] and parts[0].casefold() in REPO_ENTRIES:
                     return True
@@ -467,7 +478,7 @@ VIDEO_MAX_SIDE, VIDEO_MAX_FRAMES, VIDEO_MAX_STEPS = 512, 33, 20
 IMAGE_MAX_SIDE = 768  # not measured yet: raise only after measuring
 VIDEO_TIMEOUT = 900  # seconds to wait for one job
 POLL_LOST = 30  # seconds a server may stay silent (restart, hiccup) before a job is given up; one failed poll must not end a job that still runs
-# CogVideoX-2b (cogvideo service, chosen in the Models panel) has one fixed format; these must equal cogvideo/server.py. Steps: 50 is the model card's value.
+# CogVideoX-2b (cogvideo service, chosen in the Settings panel) has one fixed format; these must equal cogvideo/server.py. Steps: 50 is the model card's value.
 # Not measured on the 8 GB laptop: the timeout is a generous guess, lower the default steps if jobs take too long.
 COG_FORMAT, COG_STEPS, COG_DEFAULT_STEPS, COG_TIMEOUT = (720, 480, 49), (10, 50), 50, 3600
 GENERATED = DATA / "buia" / "generated"  # images and videos made by the tools
@@ -796,15 +807,125 @@ def fit_context(msgs: list) -> None:
 
 
 # ---------- memory ----------
+def read_memory_file(path: Path) -> str | None:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except (OSError, RuntimeError):
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        proc_fd = Path(f"/proc/self/fd/{fd}")
+        if proc_fd.exists():
+            opened = proc_fd.resolve()
+            if not any(opened == root or opened.is_relative_to(root) for root in ROOTS):
+                return None
+        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as stream:
+            fd = -1
+            return stream.read()
+    except (OSError, RuntimeError):
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def memory_pattern_parts(pattern: str) -> list[str] | None:
+    """Validate an environment memory glob and return its virtual-path segments."""
+    normalized = pattern.strip().replace("\\", "/")
+    if not normalized or normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        return None
+    parts = normalized.split("/")
+    if parts[0].casefold() not in ("buia", "vault") or any(part in ("", ".", "..") for part in parts):
+        return None
+    if any(any(char in part for char in '<>"|') for part in parts):
+        return None
+    return parts
+
+
+def memory_pattern_matches(pattern_parts: list[str], path_parts: tuple[str, ...]) -> bool:
+    """Match virtual path segments; '*' never crosses a folder and '**' crosses folders."""
+    memo = {}
+
+    def match(pi: int, si: int) -> bool:
+        key = (pi, si)
+        if key in memo:
+            return memo[key]
+        if pi == len(pattern_parts):
+            result = si == len(path_parts)
+        elif pattern_parts[pi] == "**":
+            result = match(pi + 1, si) or (si < len(path_parts) and match(pi, si + 1))
+        elif si < len(path_parts):
+            result = fnmatchcase(path_parts[si].casefold(), pattern_parts[pi].casefold()) and match(pi + 1, si + 1)
+        else:
+            result = False
+        memo[key] = result
+        return result
+
+    return match(0, 0)
+
+
+def memory_pattern_candidates(pattern: str):
+    """Enumerate a validated memory pattern without passing environment text to a path glob."""
+    parts = memory_pattern_parts(pattern)
+    if parts is None:
+        return
+    root = ROOTS[0] if parts[0].casefold() == "buia" else ROOTS[1]
+    pattern_parts = parts[1:]
+    max_depth = len(pattern_parts)
+    try:
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            relative_dir = Path(dirpath).relative_to(root)
+            depth = len(relative_dir.parts)
+            literal_prefix = []
+            for part in pattern_parts:
+                if any(char in part for char in "*?["):
+                    break
+                literal_prefix.append(part)
+            dirnames[:] = [
+                name for name in dirnames
+                if not (Path(dirpath) / name).is_symlink()
+                and (depth >= len(literal_prefix) or fnmatchcase(name.casefold(), literal_prefix[depth].casefold()))
+                and ("**" in pattern_parts or depth + 1 <= max_depth - 1)
+            ]
+            for name in filenames:
+                candidate = Path(dirpath) / name
+                try:
+                    rel = candidate.relative_to(root)
+                except ValueError:
+                    continue
+                if memory_pattern_matches(pattern_parts, tuple(rel.parts)):
+                    yield candidate
+    except (OSError, RuntimeError):
+        return
+
+
 def system_prompt() -> str:
     # date only: a changing clock in the prompt prefix would defeat llama-server's prompt cache
     parts = [BASE_PROMPT.format(today=datetime.now(TZ).strftime("%A %Y-%m-%d")) + (WEB_PROMPT if WEB else "")]
     budget = MEMORY_MAX_CHARS
-    files = [f for pattern in MEMORY_FILES for f in sorted(DATA.glob(pattern)) if f.is_file()]
+    files = []
+    seen = set()
+    for pattern in MEMORY_FILES:
+        # case_sensitive=False: memory/projects and memory/Projects are one folder in Obsidian on Windows, and is_memory_file() compares case-insensitively too.
+        # Only the folders the pattern names are listed, so the size of the vault or of the clone does not matter.
+        for f in sorted(memory_pattern_candidates(pattern), key=lambda path: str(path).casefold()):
+            try:
+                resolved = f.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if resolved in seen or not resolved.is_file() or protected(resolved) or not any(resolved.is_relative_to(root) for root in ROOTS):
+                continue  # a symlink or a ../ in a pattern must not lead out of buia/ and vault/
+            seen.add(resolved)
+            files.append(resolved)
     for f in files:
         if budget <= 0:
             break
-        text = f.read_text(encoding="utf-8", errors="replace").strip()
+        text = read_memory_file(f)
+        if text is None:
+            continue
+        text = text.strip()
         cut = text[:budget]
         budget -= len(cut)
         parts.append(f"# Memory file: {rel(f)}\n{cut}" + ("\n[truncated]" if len(cut) < len(text) else ""))
@@ -1175,7 +1296,7 @@ def delete_chat(cid: str):
 
 
 class VideoAsk(BaseModel):
-    model: str = ""  # a video preset id from the Models panel; empty = whatever the video server runs now
+    model: str = ""  # a video preset id from the Settings panel; empty = whatever the video server runs now
     values: dict     # the form: prompt, negative_prompt and the fields of videogen.fields for that engine
 
 

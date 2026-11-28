@@ -1,7 +1,7 @@
 """Every local file that agent/static/index.html refers to (script src, link href, img src, CSS url()) must be served by the real app.
 
 The static folder is mounted at "/", so the file agent/static/x.js is /x.js; a "static/x.js" reference answers 404 and the browser silently skips it.
-The logo and icon live in assets/ and docker-compose.yml mounts them into static/: the test app does not have those two, so their source files are checked instead.
+The logos and the icon live in assets/ and docker-compose.yml mounts them into static/: the test app does not have those three, so their source files are checked instead.
 Like test_video_api.py this needs fastapi and httpx (skipped without them). From core:  python -m unittest discover -s tests
 """
 import atexit
@@ -98,6 +98,16 @@ class StaticAssets(unittest.TestCase):
         self.assertIsNotNone(rule, "the rule that overlays the panels is gone")
         unpositioned = [p for p in panels if "#" + p not in rule.group(1)]
         self.assertEqual(unpositioned, [], "these panels would render in the page flow instead of over it")
+
+    def test_header_buttons_and_the_theme_selector_are_where_the_ui_expects_them(self):
+        html = (AGENT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        header = re.search(r"<header>(.*?)</header>", html, re.S)
+        self.assertIsNotNone(header, "the header is gone")
+        buttons = re.findall(r'<button[^>]*\bid="(\w+)"', header.group(1))
+        self.assertEqual(buttons, ["chats", "models", "vopen", "new"], "header buttons: Chats, Settings, Video dashboard, New")
+        for ident in ("vopen", "theme"):  # the page looks both up by id: a second one would silently win or lose
+            self.assertEqual(len(re.findall(rf'\bid="{ident}"', html)), 1, ident)
+        self.assertTrue(html.index('<div id="mpanel"') < html.index('id="theme"') < html.index('<div id="vpanel"'), "the theme selector belongs in the Settings panel")
 
 if __name__ == "__main__":
     unittest.main()

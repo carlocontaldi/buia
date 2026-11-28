@@ -1,3 +1,7 @@
+# Fixed project name, so the volumes are buia_models and buia_sdlogs. Without it Compose uses the folder name (core), which another project could share.
+# COMPOSE_PROJECT_NAME in .env, or the -p option, overrides it.
+name: buia
+
 x-logging: &logging              # Docker keeps container logs forever unless told otherwise: keep the newest 60 MB per service
   driver: json-file
   options:
@@ -6,7 +10,7 @@ x-logging: &logging              # Docker keeps container logs forever unless to
 
 services:
   llama:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:222d8eeee19c4407a0ad00eec534dc5d372c706c4c67f58e3993a25ed8ed3d3e   # pinned to the build known to work (2026-11-06); RTX 50-series + CUDA 13 driver. Older driver: use :server-cuda and drop the digest
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:222d8eeee19c4407a0ad00eec534dc5d372c706c4c67f58e3993a25ed8ed3d3e}   # pinned to the build known to work (2026-11-06); CUDA 13 needs NVIDIA driver 580 or newer. Older driver: LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda in .env
     restart: unless-stopped
     logging: *logging
     environment:
@@ -39,6 +43,7 @@ services:
 
   agent:
     build: ./agent
+    user: "${BUIA_UID:-0}:${BUIA_GID:-0}"   # Linux: setup.sh sets your ids in .env, so chats/, generated/ and memory/ belong to you, not root. Docker Desktop (Windows) does not care: 0:0 = the image's root
     restart: unless-stopped
     logging: *logging
     depends_on: [llama]
@@ -54,13 +59,14 @@ services:
       KV_CACHE_TYPE: ${KV_CACHE_TYPE:-q8_0}
       HF_TOKEN: ${HF_TOKEN:-}
       GPU_VRAM_MB: ${GPU_VRAM_MB:-}    # optional manual VRAM size if nvidia-smi is not visible in this container
-      MEMORY_FILES: ${MEMORY_FILES:-buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md}
+      MEMORY_FILES: ${MEMORY_FILES:-buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md}
       MEMORY_MAX_CHARS: ${MEMORY_MAX_CHARS:-12000}   # size of the always-loaded memory (agent/agent.py)
       MAX_STEPS: ${MAX_STEPS:-8}                   # tool-call rounds per user message
       MAX_HISTORY: ${MAX_HISTORY:-20}               # chat messages sent to the model per request
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}   # extra host names the web UI may be opened under (localhost, 127.0.0.1 and *.ts.net always work)
       TZ: ${TZ:-UTC}
       BUIA_PASSWORD: ${BUIA_PASSWORD:-}   # web UI login password; empty = nobody can log in
+      BUIA_SESSION_SALT: ${BUIA_SESSION_SALT:-}   # stable per-install salt for deriving the session-signing key
       WEB_ACCESS: ${WEB_ACCESS:-on}       # the web_search and web_fetch tools; off removes both
       SEARCH_URL: http://searxng:8080     # where web_search asks (the searxng service below)
       NVIDIA_DRIVER_CAPABILITIES: utility   # only nvidia-smi (to read VRAM for the model fit check), no compute
@@ -82,9 +88,9 @@ services:
         target: /data/vault
         read_only: true                 # the agent can read the vault but never change it
         bind:
-          create_host_path: true        # the default .vault is not in the repo: let Docker create it if install.ps1 has not
+          create_host_path: true        # the default .vault is not in the repo: let Docker create it if the setup script has not
       - type: bind
-        source: ./sdmodels              # image/video model files: the Models panel downloads them here (sd and sd-video mount the same folder read-only)
+        source: ./sdmodels              # image/video model files: the Settings panel downloads them here (sd and sd-video mount the same folder read-only)
         target: /data/sdmodels          # outside the buia folder and the vault, so the model's file tools cannot reach it
         bind:
           create_host_path: true
@@ -92,8 +98,8 @@ services:
         source: sdlogs                  # sd-server's output (sd-run.sh copies it): the Video panel reads the sampling steps of a job from it
         target: /sdlogs
         read_only: true
-      # The web UI's logo and icon live in assets/, next to the README banner, and are mounted into its static folder (the image build
-      # cannot reach outside core/agent). Without them the UI only loses its icons.
+      # The web UI's logos (512 and 256 px) and icon live in assets/, next to the README banner, and are mounted into its static folder
+      # (the image build cannot reach outside core/agent). Without them the UI only loses its images.
       - type: bind
         source: ../assets/buia-logo.png
         target: /app/static/buia-logo.png
@@ -106,13 +112,19 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      - type: bind
+        source: ../assets/buia-logo-256.png
+        target: /app/static/buia-logo-256.png
+        read_only: true
+        bind:
+          create_host_path: false
 
   # Web search for the agent's web_search tool: a SearXNG metasearch engine, no account or API key. It starts with everything else; the agent
   # does not wait for it, so a failed start only makes web_search report an error. WEB_ACCESS=off in .env removes the tools but not this container.
-  # The image is the moving tag: to freeze it like the llama image, run "docker pull searxng/searxng:latest" and then
-  # docker image inspect searxng/searxng:latest --format "{{index .RepoDigests 0}}", and replace the tag below with the printed name@sha256:... value.
+  # Pinned by digest like the llama image (the newest build on 2026-11-26). To move to a newer one, replace the digest below with the "Digest:" line of
+  # docker buildx imagetools inspect docker.io/searxng/searxng:latest
   searxng:
-    image: docker.io/searxng/searxng:latest
+    image: docker.io/searxng/searxng:latest@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
     restart: unless-stopped
     logging: *logging
     environment:
@@ -131,13 +143,13 @@ services:
       dockerfile: docker/Dockerfile.cuda
       args:
         CUDA_VERSION: "12.8.1"       # Dockerfile default is 12.6.3; Blackwell needs CUDA >= 12.8
-        CUDA_ARCHITECTURES: "120"    # 12.0 = RTX 50 series. Yours: nvidia-smi --query-gpu=compute_cap --format=csv,noheader (8.9 is "89")
+        CUDA_ARCHITECTURES: "${SD_CUDA_ARCHITECTURES:-120}"    # 12.0 = RTX 50 series. Yours: SD_CUDA_ARCHITECTURES in .env (setup.sh sets it); nvidia-smi --query-gpu=compute_cap --format=csv,noheader prints it (8.9 is "89")
     restart: unless-stopped
     init: true
     entrypoint: ["/bin/sh", "-c"]
-    # Model flags: sdmodels/active-image.args (written by "Use" in the Models panel) wins; without it SD_ARGS from .env (one line) is used.
+    # Model flags: sdmodels/active-image.args (written by "Use" in the Settings panel) wins; without it SD_ARGS from .env (one line) is used.
     # sd-run.sh restarts sd-server when that file changes. The hand-written examples (Z-Image Turbo for images, Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video)
-    # are in .env.example; the Models panel has the same three as presets (agent/sdmodels.py): keep them equal.
+    # are in .env.example; the Settings panel has the same three as presets (agent/sdmodels.py): keep them equal.
     # --lora-model-dir matters: it defaults to "." and the server scans it recursively on /capabilities AND on every img_gen/vid_gen request.
     # The container's working dir is /, so the default scan walks /proc and fails with HTTP 500. /models/loras may simply not exist (scan is skipped).
     # -v makes sd.cpp log the "compute buffer size" lines. Read them with: docker compose logs sd | findstr /c:"compute buffer"
@@ -173,8 +185,8 @@ services:
       service: sd
     command: ["exec /bin/sh /sd-run.sh /models/active-video.args ${SD_VIDEO_ARGS:-}"]
 
-  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with .\install.cmd -CogVideo
-  # (it sets COGVIDEO=on in .env, which update.ps1 reads). Pick CogVideoX in the Models panel (Use): from then on video jobs go here instead of sd-video.
+  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with setup.cmd -CogVideo (Linux: setup.sh --cogvideo)
+  # (it sets COGVIDEO=on in .env, which the setup script reads). Pick CogVideoX in the Settings panel (Use): from then on video jobs go here instead of sd-video.
   # Each job runs in a fresh process (cogvideo/server.py starts cogvideo/generate.py), so this service holds no VRAM while idle. The 9.5 GB text encoder
   # runs on the CPU: Docker Desktop's WSL2 VM needs about 12 GB of free RAM for a job (see README > Image and video generation).
   cogvideo:
@@ -185,7 +197,7 @@ services:
     logging: *logging                # prints "step i/N" while a video is made
     volumes:
       - type: bind
-        source: ./sdmodels           # the Models panel downloads CogVideoX-2b into sdmodels/CogVideoX-2b
+        source: ./sdmodels           # the Settings panel downloads CogVideoX-2b into sdmodels/CogVideoX-2b
         target: /models
         read_only: true
     # no "ports:" on purpose: only the agent container should reach it

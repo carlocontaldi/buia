@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import os
 import time
+from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -24,8 +25,14 @@ def password() -> str:
     return os.getenv("BUIA_PASSWORD", "")
 
 
+@lru_cache(maxsize=1)
+def _derive_key(pwd: str, salt: str) -> bytes:
+    return hashlib.scrypt(pwd.encode(), salt=salt.encode(), n=2**14, r=8, p=1, dklen=32)
+
+
 def key() -> bytes:
-    return hashlib.sha256(b"buia-session\0" + password().encode()).digest()
+    # The setup script adds a random salt per installation to .env. Without one (an empty BUIA_SESSION_SALT counts as none) the key uses a fixed salt: sessions still work, but the key then depends on the password alone.
+    return _derive_key(password(), os.getenv("BUIA_SESSION_SALT") or "buia-session-v1")
 
 
 def sign(expiry: str) -> str:
@@ -58,7 +65,7 @@ async def login(body: Login, request: Request):
     global fails, locked_until
     pwd = password()
     if not pwd:
-        raise HTTPException(503, "BUIA_PASSWORD is not set in .env. Run .\\install.cmd (it creates one), then reload this page.")
+        raise HTTPException(503, "BUIA_PASSWORD is not set in .env. Run the installer (setup.cmd on Windows, setup.sh on Linux: it creates one), then reload this page.")
     if time.time() < locked_until:
         raise HTTPException(429, "too many wrong passwords; wait a minute")
     if not hmac.compare_digest(body.password.encode(), pwd.encode()):

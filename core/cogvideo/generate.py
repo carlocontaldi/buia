@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-MODEL = Path(os.getenv("COG_MODEL_DIR", "/models/CogVideoX-2b"))  # the folder the Models panel downloads (sdmodels/CogVideoX-2b)
+MODEL = Path(os.getenv("COG_MODEL_DIR", "/models/CogVideoX-2b"))  # the folder the Settings panel downloads (sdmodels/CogVideoX-2b)
 WIDTH, HEIGHT, FRAMES, FPS, GUIDANCE = 720, 480, 49, 8, 6.0      # model card values
 MAX_TOKENS = 226
 
