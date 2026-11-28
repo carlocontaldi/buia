@@ -37,7 +37,17 @@ from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
-DATA = Path(os.getenv("DATA_DIR", "/data")).resolve()
+
+def _safe_data_root() -> Path:
+    allowed_base = Path("/data").resolve()
+    configured = Path(os.getenv("DATA_DIR", "/data")).resolve()
+    try:
+        configured.relative_to(allowed_base)
+    except ValueError:
+        return allowed_base
+    return configured
+
+DATA = _safe_data_root()
 ROOTS = [(DATA / "buia").resolve(), (DATA / "vault").resolve()]
 MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md").split(",") if p.strip()]
 try:
