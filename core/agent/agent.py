@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -809,26 +810,64 @@ def fit_context(msgs: list) -> None:
 
 
 # ---------- memory ----------
+def read_memory_file(path: Path) -> str | None:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except (OSError, RuntimeError):
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        proc_fd = Path(f"/proc/self/fd/{fd}")
+        if proc_fd.exists():
+            opened = proc_fd.resolve()
+            if not any(opened == root or opened.is_relative_to(root) for root in ROOTS):
+                return None
+        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as stream:
+            fd = -1
+            return stream.read()
+    except (OSError, RuntimeError):
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def system_prompt() -> str:
     # date only: a changing clock in the prompt prefix would defeat llama-server's prompt cache
     parts = [BASE_PROMPT.format(today=datetime.now(TZ).strftime("%A %Y-%m-%d")) + (WEB_PROMPT if WEB else "")]
     budget = MEMORY_MAX_CHARS
     files = []
     seen = set()
-    for pattern in MEMORY_FILES:
-        for f in sorted(DATA.glob(pattern)):
+    patterns = [pattern.casefold() for pattern in MEMORY_FILES]
+    for root in sorted(ROOTS):
+        for f in sorted(root.rglob("*")):
             try:
                 resolved = f.resolve()
             except (OSError, RuntimeError):
                 continue
-            if not f.is_file() or resolved in seen:
+            if not resolved.is_file():
+                continue
+            if not any(resolved == allowed or resolved.is_relative_to(allowed) for allowed in ROOTS):
+                continue
+            try:
+                virtual = resolved.relative_to(DATA).as_posix().casefold()
+            except ValueError:
+                continue
+            if not any(fnmatchcase(virtual, pattern.replace("**/", "")) or fnmatchcase(virtual, pattern) for pattern in patterns):
+                continue
+            if resolved in seen:
                 continue
             seen.add(resolved)
-            files.append(f)
+            files.append(resolved)
     for f in files:
         if budget <= 0:
             break
-        text = f.read_text(encoding="utf-8", errors="replace").strip()
+        text = read_memory_file(f)
+        if text is None:
+            continue
+        text = text.strip()
         cut = text[:budget]
         budget -= len(cut)
         parts.append(f"# Memory file: {rel(f)}\n{cut}" + ("\n[truncated]" if len(cut) < len(text) else ""))

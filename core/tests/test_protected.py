@@ -116,24 +116,22 @@ class MemoryFilesTests(unittest.TestCase):
     def test_system_prompt_loads_new_and_legacy_project_memory(self):
         with tempfile.TemporaryDirectory() as data:
             root = Path(data)
-            lower = root / "lower.md"
-            upper = root / "upper.md"
+            lower = root / "buia/memory/projects/lower.md"
+            upper = root / "buia/memory/Projects/upper.md"
+            lower.parent.mkdir(parents=True)
+            upper.parent.mkdir(parents=True)
             lower.write_text("lowercase memory", encoding="utf-8")
             upper.write_text("legacy memory", encoding="utf-8")
 
-            def glob_files(self, pattern):
-                if pattern == "buia/memory/projects/*.md":
-                    return [lower]
-                if pattern == "buia/memory/Projects/*.md":
-                    return [upper]
-                return []
-
             with unittest.mock.patch.object(agent, "DATA", root), \
+                    unittest.mock.patch.object(agent, "ROOTS", [
+                        (root / "buia").resolve(),
+                        (root / "vault").resolve(),
+                    ]), \
                     unittest.mock.patch.object(agent, "MEMORY_FILES", [
                         "buia/memory/projects/*.md",
                         "buia/memory/Projects/*.md",
-                    ]), \
-                    unittest.mock.patch.object(agent.Path, "glob", glob_files):
+                    ]):
                 prompt = agent.system_prompt()
         self.assertIn("lowercase memory", prompt)
         self.assertIn("legacy memory", prompt)
@@ -141,23 +139,43 @@ class MemoryFilesTests(unittest.TestCase):
     def test_system_prompt_deduplicates_case_alias_memory_files(self):
         with tempfile.TemporaryDirectory() as data:
             root = Path(data)
-            shared = root / "shared.md"
+            shared = root / "buia/memory/projects/shared.md"
+            shared.parent.mkdir(parents=True)
             shared.write_text("shared memory", encoding="utf-8")
 
-            def glob_files(self, pattern):
-                return [shared] if pattern in (
-                    "buia/memory/projects/*.md",
-                    "buia/memory/Projects/*.md",
-                ) else []
-
             with unittest.mock.patch.object(agent, "DATA", root), \
+                    unittest.mock.patch.object(agent, "ROOTS", [
+                        (root / "buia").resolve(),
+                        (root / "vault").resolve(),
+                    ]), \
                     unittest.mock.patch.object(agent, "MEMORY_FILES", [
                         "buia/memory/projects/*.md",
                         "buia/memory/Projects/*.md",
-                    ]), \
-                    unittest.mock.patch.object(agent.Path, "glob", glob_files):
+                    ]):
                 prompt = agent.system_prompt()
         self.assertEqual(prompt.count("shared memory"), 1)
+
+    def test_system_prompt_rejects_files_and_symlinks_outside_allowed_roots(self):
+        with tempfile.TemporaryDirectory() as data:
+            root = Path(data)
+            outside = root / "outside.md"
+            outside.write_text("outside secret", encoding="utf-8")
+            buia = root / "buia"
+            buia.mkdir()
+            link = buia / "link.md"
+            link.symlink_to(outside)
+
+            with unittest.mock.patch.object(agent, "DATA", root), \
+                    unittest.mock.patch.object(agent, "ROOTS", [
+                        buia.resolve(),
+                        (root / "vault").resolve(),
+                    ]), \
+                    unittest.mock.patch.object(agent, "MEMORY_FILES", [
+                        "../outside.md",
+                        "buia/link.md",
+                    ]):
+                prompt = agent.system_prompt()
+        self.assertNotIn("outside secret", prompt)
 
 
 if __name__ == "__main__":
