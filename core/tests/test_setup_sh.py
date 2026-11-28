@@ -240,6 +240,19 @@ class SetupShTests(unittest.TestCase):
         self.assertIn("docker pull ghcr.io/ggml-org/llama.cpp:server-cuda13", self.calls())   # no @sha256: the moving tag
         self.assertIn("sha256:newest", r.stdout)
 
+    def test_llama_option_checks_the_image_you_configured(self):
+        r = self.run_setup("--llama", LLAMA_IMAGE="example.test/llama:custom@sha256:abc")   # from the shell, like Compose reads it
+        self.assertIn("docker pull example.test/llama:custom", self.calls())
+        self.log.unlink()
+        with self.env.open("a", encoding="utf-8") as f:
+            f.write("LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda\n")   # from .env; the shell still wins when both are set
+        self.assertEqual(self.run_setup("--llama").returncode, 0)
+        self.assertIn("docker pull ghcr.io/ggml-org/llama.cpp:server-cuda", self.calls())
+        self.log.unlink()
+        self.run_setup("--llama", LLAMA_IMAGE="example.test/llama:custom")
+        self.assertIn("docker pull example.test/llama:custom", self.calls())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_unknown_option_is_refused_and_help_works(self):
         r = self.run_setup("--nope")
         self.assertNotEqual(r.returncode, 0)

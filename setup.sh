@@ -173,7 +173,7 @@ main() {
 
   # 8. Optional: what the newest llama.cpp image is now (the compose file keeps the pinned one)
   if [ "$llama" -eq 1 ]; then
-    image=$(env_value LLAMA_IMAGE); image=${image:-$LLAMA_DEFAULT}; latest=${image%@*}
+    image=${LLAMA_IMAGE:-$(env_value LLAMA_IMAGE)}; image=${image:-$LLAMA_DEFAULT}; latest=${image%@*}   # the shell wins over .env, as in Compose
     docker pull "$latest" || die "docker pull $latest failed"
     say "Newest $latest is:"
     docker image inspect "$latest" --format '{{index .RepoDigests 0}}'
