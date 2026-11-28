@@ -88,7 +88,7 @@ services:
         target: /data/vault
         read_only: true                 # the agent can read the vault but never change it
         bind:
-          create_host_path: true        # the default .vault is not in the repo: let Docker create it if the installer has not
+          create_host_path: true        # the default .vault is not in the repo: let Docker create it if the setup script has not
       - type: bind
         source: ./sdmodels              # image/video model files: the Models panel downloads them here (sd and sd-video mount the same folder read-only)
         target: /data/sdmodels          # outside the buia folder and the vault, so the model's file tools cannot reach it
@@ -185,8 +185,8 @@ services:
       service: sd
     command: ["exec /bin/sh /sd-run.sh /models/active-video.args ${SD_VIDEO_ARGS:-}"]
 
-  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with install.cmd -CogVideo (Linux: setup.sh --cogvideo)
-  # (it sets COGVIDEO=on in .env, which the update reads). Pick CogVideoX in the Models panel (Use): from then on video jobs go here instead of sd-video.
+  # CogVideoX-2b text-to-video (Diffusers/PyTorch; stable-diffusion.cpp cannot run it). Its own profile and image: install with setup.cmd -CogVideo (Linux: setup.sh --cogvideo)
+  # (it sets COGVIDEO=on in .env, which the setup script reads). Pick CogVideoX in the Models panel (Use): from then on video jobs go here instead of sd-video.
   # Each job runs in a fresh process (cogvideo/server.py starts cogvideo/generate.py), so this service holds no VRAM while idle. The 9.5 GB text encoder
   # runs on the CPU: Docker Desktop's WSL2 VM needs about 12 GB of free RAM for a job (see README > Image and video generation).
   cogvideo:

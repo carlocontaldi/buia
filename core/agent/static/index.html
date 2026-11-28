@@ -371,7 +371,7 @@ window.addEventListener('buia:sd-changed', refreshSd);  // fired by sd-custom.js
 function renderSd() {
   const run = k => k + ' server: ' + (sd.servers[k].up ? 'running ' + (sd.servers[k].model || 'with no model') : 'not running');
   $('sdinfo').textContent = run('image') + ' · ' + run('video') + ' · ' + size(sd.disk_free_mb) + ' free. A server restarts a few seconds after you click Use.'
-    + (sd.servers.image.up || sd.servers.video.up ? '' : ' Generation is installed with install.cmd -Sd (Linux: setup.sh --sd).');
+    + (sd.servers.image.up || sd.servers.video.up ? '' : ' Generation is installed with setup.cmd -Sd (Linux: setup.sh --sd).');
   const box = $('sdlist'); box.textContent = '';
   for (const m of sd.models) {
     const q = el('div', { class: 'q' }, el('div', { class: 'qh' }, el('b', { textContent: m.name }),

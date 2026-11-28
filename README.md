@@ -32,10 +32,10 @@ It generates text, images and videos, reads and writes your notes through file t
 
 - An NVIDIA GPU, and either
   - **Windows 11** with Docker Desktop (WSL2 backend) and its NVIDIA GPU support, or
-  - **Linux** with [Docker Engine](https://docs.docker.com/engine/install/) and its Compose plugin (`docker compose`), the NVIDIA driver and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Your user must be in the `docker` group (`sudo usermod -aG docker $USER`, then log in again). SELinux hosts (Fedora, RHEL), rootless Docker and Podman are untested.
+  - **Linux** with [Docker Engine](https://docs.docker.com/engine/install/) and its Compose plugin (`docker compose`), the NVIDIA driver and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Your user must be in the `docker` group (`sudo usermod -aG docker $USER`, then log in again). On Ubuntu use Docker Engine from docker.com's apt repository, or Ubuntu's `docker.io` together with `docker-compose-v2`; not the snap package, which confines Docker and is untested here. SELinux hosts (Fedora, RHEL), rootless Docker and Podman are untested.
 - NVIDIA driver recent enough for CUDA 13: 580 or newer on Linux (the compose file uses `server-cuda13`, pinned by digest to a known working build; for an older driver put `LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda` in `core/.env`)
 - Git. Tailscale if you want phone access.
-- For image and video generation (`-Sd` / `--sd`): the sd image is built for one GPU architecture, 12.0 by default (RTX 50 series, CUDA 12.8). `./setup.sh --sd` writes yours (from `nvidia-smi`) to `core/.env` as `SD_CUDA_ARCHITECTURES`; on Windows set it there yourself (`nvidia-smi --query-gpu=compute_cap --format=csv,noheader` prints it; drop the dot, 8.9 is `89`) and run `.\update.cmd`. The chat models and the CogVideoX service are not tied to that value.
+- For image and video generation (`-Sd` / `--sd`): the sd image is built for one GPU architecture, 12.0 by default (RTX 50 series, CUDA 12.8). `setup.cmd -Sd` (Linux: `./setup.sh --sd`) writes yours (from `nvidia-smi`) to `core/.env` as `SD_CUDA_ARCHITECTURES`. If it cannot read it, set it there yourself (`nvidia-smi --query-gpu=compute_cap --format=csv,noheader` prints it; drop the dot, 8.9 is `89`) and run the setup script again. The chat models and the CogVideoX service are not tied to that value.
 - Developed and measured on one machine: RTX 5050 Laptop GPU (8 GB VRAM), 32 GB RAM. The image and video presets assume that size.
 
 ## Install
@@ -45,7 +45,7 @@ Windows (PowerShell):
 ```powershell
 git clone https://github.com/carlocontaldi/buia.git $HOME\buia
 cd $HOME\buia
-.\install.cmd              # add -Tailscale to expose it to your tailnet, -Sd for image/video generation, -CogVideo for the CogVideoX video model
+.\setup.cmd                # add -Tailscale to expose it to your tailnet, -Sd for image/video generation, -CogVideo for the CogVideoX video model
 ```
 
 Linux:
@@ -56,19 +56,19 @@ cd ~/buia
 ./setup.sh                 # add --tailscale to expose it to your tailnet, --sd for image/video generation, --cogvideo for the CogVideoX video model
 ```
 
-The buia folder is the repository and the folder the agent reads and writes (`BUIA_PATH`). `install.cmd` runs `core/install.ps1`, `setup.sh` is the same on Linux: it checks Docker and GPU access,
-creates `core/.env` from `.env.example` and `BUIA.md` from `templates/BUIA.md`, builds and starts the core, and waits until it answers.
+The buia folder is the repository and the folder the agent reads and writes (`BUIA_PATH`). `setup.cmd` runs `core/setup.ps1`, `setup.sh` is the same on Linux. One script installs and updates: with no `core/.env` yet it installs, otherwise it updates (see Update). Installing checks Docker and GPU access,
+creates `core/.env` from `.env.example` (with a random web UI password and session salt) and `BUIA.md` from `templates/BUIA.md`, builds and starts the core, and waits until it answers.
 It never overwrites an existing `.env` or `BUIA.md`. `BUIA_PATH` and `VAULT_PATH` in `.env` are optional: the buia folder defaults to the folder above `core`, the vault to `.vault/` inside it.
 On Linux, run `setup.sh` as your normal user, not with `sudo`: it puts your user and group ids in `.env` (`BUIA_UID`, `BUIA_GID`), so the agent container runs as you and the files it writes in your buia folder (`chats/`, `generated/`, `memory/`) are yours, not root's.
 
-The agent's file tools refuse `core/` (it holds `.env` and the scripts and is recognised by `install.ps1` and `docker-compose.yml`, so keep `.env` there, not next to `BUIA.md`),
+The agent's file tools refuse `core/` (it holds `.env` and the scripts and is recognised by `setup.ps1` and `docker-compose.yml`, so keep `.env` there, not next to `BUIA.md`),
 `.git`, `templates/` and `README.md` at the top of the buia folder (they belong to the repo), `.obsidian/` (plugins there are code Obsidian runs) and `.vault/`
 (read it as `vault/`, which is mounted read-only; set `VAULT_PATH` to another folder, such as an Obsidian vault, to read that instead).
 The agent's notes live in `memory/`.
 
 Run this README's `docker compose`, test and lock-file commands in `core/`, where `docker-compose.yml` and `.env` are.
 
-Then open http://127.0.0.1:8000 and log in with the password the installer printed (`BUIA_PASSWORD` in `.env`; edit it there and run `docker compose up -d` to change it).
+Then open http://127.0.0.1:8000 and log in with the password the setup script printed (`BUIA_PASSWORD` in `.env`; edit it there and run `docker compose up -d` to change it).
 Click **Settings**, check a Hugging Face repo, download a quant marked `fits`, click **Use**.
 
 ## Web UI
@@ -83,25 +83,25 @@ Click **Settings**, check a Hugging Face repo, download a quant marked `fits`, c
 
 ```powershell
 cd $HOME\buia
-.\update.cmd               # git pull + rebuild + restart
-.\update.cmd -Llama        # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
+.\setup.cmd                # finds core\.env, so: git pull + rebuild + restart
+.\setup.cmd -Llama         # same, and show the digest of the newest llama.cpp server image (the compose file keeps the pinned one until you change it)
+.\setup.cmd -NoPull        # rebuild without pulling (local commits, or a copy that is not a git clone)
 ```
 
-On Linux the same script installs and updates: `./setup.sh` finds `core/.env`, so it pulls (`git pull --ff-only`), rebuilds what is installed (`sd` if `core/sdcpp/` exists, `cogvideo` if `COGVIDEO=on`) and restarts.
-`./setup.sh --llama` also shows the llama.cpp digest, `./setup.sh --no-pull` rebuilds without pulling (local commits, or a copy that is not a git clone).
+On Linux it is `./setup.sh`, with `--llama` and `--no-pull`. An update pulls (`git pull --ff-only`), rebuilds what is installed (`sd` if `core/sdcpp/` exists, `cogvideo` if `COGVIDEO=on`), restarts, and adds to `.env` what a newer version needs and it lacks (a web UI password, the session salt). It never changes a value that is there.
 
 The release number is in `core/agent/VERSION` and in the answer of `http://127.0.0.1:8000/api/health`; give it when you report a problem.
 
 ## Phone (Tailscale)
 
-`.\install.cmd -Tailscale` (Linux: `./setup.sh --tailscale`), or by hand `tailscale serve --bg 8000`; open the `https://...ts.net` address from `tailscale serve status` on a phone signed in to the same tailnet.
+`.\setup.cmd -Tailscale` (Linux: `./setup.sh --tailscale`), or by hand `tailscale serve --bg 8000`; open the `https://...ts.net` address from `tailscale serve status` on a phone signed in to the same tailnet.
 Use `serve`, never `funnel`: the agent has one shared password only and can write notes. Everyone on your tailnet can reach the login page, so limit that to your own devices in the Tailscale access rules.
 
 ## What lives where
 
 | In git | Not in git (git-ignored or kept elsewhere, never committed) |
 |---|---|
-| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `.github/workflows/`, `install.cmd`, `update.cmd`, `setup.sh` | `core/.env` (token, password, optional paths), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
+| `core/` (`agent/` code and web UI, `docker-compose.yml`, scripts), `templates/`, `tools/`, `assets/`, `.github/workflows/`, `setup.cmd`, `setup.sh` | `core/.env` (token, password, optional paths), `BUIA.md`, `chats/`, `generated/`, `.buia-settings.json`, your notes (`memory/`), `.vault/`, downloaded chat models (Docker volume `models`), `sdcpp/` and `sdmodels/` |
 
 ## Settings
 
@@ -128,7 +128,7 @@ The `searxng` image is the moving `latest` tag, unlike the llama image; to freez
 
 ## Image and video generation (optional)
 
-`.\install.cmd -Sd` (Linux: `./setup.sh --sd`) clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp/`, creates `sdmodels/` (both in `core/`) and builds the `sd` service; the first build compiles for CUDA and takes a while.
+`.\setup.cmd -Sd` (Linux: `./setup.sh --sd`) clones stable-diffusion.cpp (pinned release, with submodules) into `sdcpp/`, creates `sdmodels/` (both in `core/`) and builds the `sd` service; the first build compiles for CUDA and takes a while.
 
 1. Open **Settings** > **Image and video models**, **Download** a preset (Z-Image Turbo for images; Wan 2.1 T2V 1.3B or Wan 2.2 TI2V 5B for video), then **Use**.
    Downloads come from Hugging Face into `sdmodels/`, resume after a cancel or a dropped connection and are checked against their sha256.
@@ -149,7 +149,7 @@ The `searxng` image is the moving `latest` tag, unlike the llama image; to freez
    Results are saved in `generated/` inside your buia folder and shown inline in the chat.
 
 `tools/sd_smoke.py` runs one small video job against the sd server to check it end to end and saves it in `generated/` (instructions at the top of the file).
-The update (`.\update.cmd`, or `./setup.sh` on Linux) rebuilds the sd service too once `sdcpp/` exists.
+The setup script (`.\setup.cmd`, or `./setup.sh` on Linux) rebuilds the sd service too once `sdcpp/` exists.
 
 A generation keeps running if you close the page, the phone sleeps or you press Stop. The result is added to the chat when it is done
 (reopen the chat to see it), and the chat accepts the next message after that. Each service keeps its newest 60 MB of Docker logs (3 files of 20 MB);
@@ -175,8 +175,8 @@ write the prompt and press **Generate**.
 
 ### CogVideoX 2B (optional second video engine)
 
-stable-diffusion.cpp cannot run CogVideoX, so `.\install.cmd -CogVideo` (Linux: `./setup.sh --cogvideo`) builds a separate `cogvideo` service (`core/cogvideo/`: Hugging Face Diffusers on PyTorch with CUDA;
-the image is several GB, the first build takes a while). It sets `COGVIDEO=on` in `.env`, so the update rebuilds it too, and does not need `-Sd`. Then, in **Settings**:
+stable-diffusion.cpp cannot run CogVideoX, so `.\setup.cmd -CogVideo` (Linux: `./setup.sh --cogvideo`) builds a separate `cogvideo` service (`core/cogvideo/`: Hugging Face Diffusers on PyTorch with CUDA;
+the image is several GB, the first build takes a while). It sets `COGVIDEO=on` in `.env`, so the setup script rebuilds it too, and does not need `-Sd`. Then, in **Settings**:
 
 1. **Download** *CogVideoX 2B* (about 13.8 GB from `zai-org/CogVideoX-2b` into `sdmodels/CogVideoX-2b/`, checked against sha256 like the other presets), then **Use**.
    From then on `generate_video` sends its jobs to the cogvideo service; **Use** on a Wan preset (or deleting CogVideoX) sends them back to `sd-video`, which is left alone
@@ -235,9 +235,9 @@ python -m unittest discover -s tests -v
 ```
 
 The API tests need FastAPI and HTTPX, so install the locked agent requirements first: otherwise those tests are skipped and hide missing coverage (`--no-deps`: the lock already lists every package).
-GitHub Actions (`.github/workflows/tests.yml`) runs the suite this way on Linux and Windows for every push to `main` and every pull request, on Windows also parses `install.ps1` and `update.ps1` with Windows PowerShell, and on Linux runs ShellCheck on `setup.sh`. A separate Linux job validates `docker-compose.yml` with every profile on and starts the agent image alone (no GPU), checking `/api/health` and the logo and icon mounts. `test_sd_run.py` exercises the Linux container supervisor and is skipped on Windows.
+GitHub Actions (`.github/workflows/tests.yml`) runs the suite this way on Linux and Windows for every push to `main` and every pull request, on Windows also parses `setup.ps1` with Windows PowerShell, and on Linux runs ShellCheck on `setup.sh`. `test_setup_sh.py` and `test_setup_ps1.py` run the real setup scripts against stand-ins for docker, git and nvidia-smi (the PowerShell one needs `pwsh` or, on Windows, `powershell`, and a free port 8000). A separate Linux job validates `docker-compose.yml` with every profile on and starts the agent image alone (no GPU), checking `/api/health` and the logo and icon mounts. `test_sd_run.py` exercises the Linux container supervisor and is skipped on Windows.
 In the agent container only `test_sd_job.py` can run from a copied `tests` directory, because the other tests locate source files relative to the repository layout.
-Compose reports agent readiness through `/api/health` (HTTP 503 until llama-server is ready); the installer and updater wait up to two minutes and, if it is not reached, warn and print the service status and recent logs.
+Compose reports agent readiness through `/api/health` (HTTP 503 until llama-server is ready); the setup script waits up to two minutes and, if it is not reached, warn and print the service status and recent logs.
 
 ## Updating dependencies
 
