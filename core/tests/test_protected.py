@@ -113,69 +113,85 @@ class MemoryFilesTests(unittest.TestCase):
         self.assertIn("buia/memory/Projects/*.md", compose)
         self.assertIn("memory/projects/", template)
 
-    def test_system_prompt_loads_new_and_legacy_project_memory(self):
+    def prompt_for(self, files, patterns):
+        """system_prompt() over a temporary DATA with the given {path: text} files, loading `patterns`."""
         with tempfile.TemporaryDirectory() as data:
-            root = Path(data)
-            lower = root / "buia/memory/projects/lower.md"
-            upper = root / "buia/memory/Projects/upper.md"
-            lower.parent.mkdir(parents=True)
-            upper.parent.mkdir(parents=True)
-            lower.write_text("lowercase memory", encoding="utf-8")
-            upper.write_text("legacy memory", encoding="utf-8")
-
+            root = Path(data).resolve()  # the Windows runner's temp folder has an 8.3 short name; the agent resolves DATA the same way
+            for name, text in files.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text, encoding="utf-8")
+            roots = [(root / "buia").resolve(), (root / "vault").resolve()]
             with unittest.mock.patch.object(agent, "DATA", root), \
-                    unittest.mock.patch.object(agent, "ROOTS", [
-                        (root / "buia").resolve(),
-                        (root / "vault").resolve(),
-                    ]), \
-                    unittest.mock.patch.object(agent, "MEMORY_FILES", [
-                        "buia/memory/projects/*.md",
-                        "buia/memory/Projects/*.md",
-                    ]):
-                prompt = agent.system_prompt()
-        self.assertIn("lowercase memory", prompt)
-        self.assertIn("legacy memory", prompt)
+                    unittest.mock.patch.object(agent, "ROOTS", roots), \
+                    unittest.mock.patch.object(agent, "MEMORY_FILES", patterns):
+                return agent.system_prompt()
+
+    def test_system_prompt_loads_the_project_folder_whatever_its_spelling(self):
+        # one folder per case: Windows has no memory/projects and memory/Projects side by side, Linux can
+        for folder, pattern in (("Projects", "buia/memory/projects/*.md"), ("projects", "buia/memory/Projects/*.md")):
+            with self.subTest(folder=folder, pattern=pattern):
+                prompt = self.prompt_for({f"buia/memory/{folder}/note.md": "project note"}, [pattern])
+                self.assertIn("project note", prompt)
 
     def test_system_prompt_deduplicates_case_alias_memory_files(self):
-        with tempfile.TemporaryDirectory() as data:
-            root = Path(data)
-            shared = root / "buia/memory/projects/shared.md"
-            shared.parent.mkdir(parents=True)
-            shared.write_text("shared memory", encoding="utf-8")
-
-            with unittest.mock.patch.object(agent, "DATA", root), \
-                    unittest.mock.patch.object(agent, "ROOTS", [
-                        (root / "buia").resolve(),
-                        (root / "vault").resolve(),
-                    ]), \
-                    unittest.mock.patch.object(agent, "MEMORY_FILES", [
-                        "buia/memory/projects/*.md",
-                        "buia/memory/Projects/*.md",
-                    ]):
-                prompt = agent.system_prompt()
+        prompt = self.prompt_for({"buia/memory/projects/shared.md": "shared memory"},
+                                 ["buia/memory/projects/*.md", "buia/memory/Projects/*.md"])
         self.assertEqual(prompt.count("shared memory"), 1)
+
+    def test_system_prompt_keeps_to_the_folders_the_patterns_name(self):
+        files = {"buia/BUIA.md": "TEXT-OF-BUIA", "buia/memory/a.md": "TEXT-OF-MEMORY", "buia/memory/deep/b.md": "TEXT-DEEP-MEMORY",
+                 "vault/top.md": "TEXT-VAULT-TOP", "vault/sub/c.md": "TEXT-VAULT-DEEP"}
+        prompt = self.prompt_for(files, ["buia/memory/*.md", "buia/BUIA.md", "vault/*.md"])
+        self.assertLess(prompt.index("TEXT-OF-MEMORY"), prompt.index("TEXT-OF-BUIA"))  # the patterns' order is the load order
+        self.assertIn("TEXT-VAULT-TOP", prompt)
+        self.assertNotIn("TEXT-DEEP-MEMORY", prompt)  # * does not cross a folder, as in a glob
+        self.assertNotIn("TEXT-VAULT-DEEP", prompt)
 
     def test_system_prompt_rejects_files_and_symlinks_outside_allowed_roots(self):
         with tempfile.TemporaryDirectory() as data:
-            root = Path(data)
-            outside = root / "outside.md"
-            outside.write_text("outside secret", encoding="utf-8")
-            buia = root / "buia"
-            buia.mkdir()
-            link = buia / "link.md"
-            link.symlink_to(outside)
+            root = Path(data).resolve()
+            (root / "outside.md").write_text("outside secret", encoding="utf-8")
+            (root / "buia").mkdir()
+            (root / "buia" / "ok.md").write_text("inside note", encoding="utf-8")
+            try:
+                (root / "buia" / "link.md").symlink_to(root / "outside.md")
+            except OSError:
+                self.skipTest("this account cannot create symlinks")
+            # the loader and read_memory_file() each refuse such a path: test the loader alone with a plain reader as well
+            for reader in (agent.read_memory_file, lambda path: path.read_text(encoding="utf-8")):
+                with unittest.mock.patch.object(agent, "DATA", root), \
+                        unittest.mock.patch.object(agent, "ROOTS", [(root / "buia").resolve(), (root / "vault").resolve()]), \
+                        unittest.mock.patch.object(agent, "MEMORY_FILES", ["../outside.md", "buia/link.md", "buia/ok.md"]), \
+                        unittest.mock.patch.object(agent, "read_memory_file", reader):
+                    prompt = agent.system_prompt()
+                self.assertIn("inside note", prompt)  # the loader works, so the next line proves something
+                self.assertNotIn("outside secret", prompt)
 
-            with unittest.mock.patch.object(agent, "DATA", root), \
-                    unittest.mock.patch.object(agent, "ROOTS", [
-                        buia.resolve(),
-                        (root / "vault").resolve(),
-                    ]), \
-                    unittest.mock.patch.object(agent, "MEMORY_FILES", [
-                        "../outside.md",
-                        "buia/link.md",
-                    ]):
-                prompt = agent.system_prompt()
-        self.assertNotIn("outside secret", prompt)
+    def test_read_memory_file_refuses_a_symlink_and_a_folder(self):
+        with tempfile.TemporaryDirectory() as data:
+            root = Path(data).resolve()
+            (root / "buia").mkdir()
+            (root / "buia" / "ok.md").write_text("inside note", encoding="utf-8")
+            with unittest.mock.patch.object(agent, "ROOTS", [(root / "buia").resolve()]):
+                self.assertEqual(agent.read_memory_file(root / "buia" / "ok.md"), "inside note")
+                self.assertIsNone(agent.read_memory_file(root / "buia"))
+                self.assertIsNone(agent.read_memory_file(root / "buia" / "missing.md"))
+
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW") and Path("/proc/self/fd").is_dir(), "needs Linux")
+    def test_read_memory_file_refuses_a_path_that_leads_out_of_the_roots(self):
+        with tempfile.TemporaryDirectory() as data:
+            root = Path(data).resolve()
+            (root / "buia").mkdir()
+            (root / "elsewhere").mkdir()
+            (root / "elsewhere" / "x.md").write_text("outside secret", encoding="utf-8")
+            (root / "buia" / "folder-link").symlink_to(root / "elsewhere", target_is_directory=True)
+            (root / "buia" / "file-link.md").symlink_to(root / "elsewhere" / "x.md")
+            (root / "buia" / "ok.md").write_text("inside note", encoding="utf-8")
+            (root / "buia" / "inner-link.md").symlink_to(root / "buia" / "ok.md")
+            with unittest.mock.patch.object(agent, "ROOTS", [(root / "buia").resolve()]):
+                self.assertIsNone(agent.read_memory_file(root / "buia" / "file-link.md"))  # the last part is a symlink: O_NOFOLLOW
+                self.assertIsNone(agent.read_memory_file(root / "buia" / "inner-link.md"))  # even one that stays inside (the loader hands over resolved paths)
+                self.assertIsNone(agent.read_memory_file(root / "buia" / "folder-link" / "x.md"))  # a folder on the way is: the fd's real path
 
 
 if __name__ == "__main__":

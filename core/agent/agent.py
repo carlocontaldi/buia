@@ -840,25 +840,16 @@ def system_prompt() -> str:
     budget = MEMORY_MAX_CHARS
     files = []
     seen = set()
-    patterns = [pattern.casefold() for pattern in MEMORY_FILES]
-    for root in sorted(ROOTS):
-        for f in sorted(root.rglob("*")):
+    for pattern in MEMORY_FILES:
+        # case_sensitive=False: memory/projects and memory/Projects are one folder in Obsidian on Windows, and is_memory_file() compares case-insensitively too.
+        # Only the folders the pattern names are listed, so the size of the vault or of the clone does not matter.
+        for f in sorted(DATA.glob(pattern, case_sensitive=False)):
             try:
                 resolved = f.resolve()
             except (OSError, RuntimeError):
                 continue
-            if not resolved.is_file():
-                continue
-            if not any(resolved == allowed or resolved.is_relative_to(allowed) for allowed in ROOTS):
-                continue
-            try:
-                virtual = resolved.relative_to(DATA).as_posix().casefold()
-            except ValueError:
-                continue
-            if not any(fnmatchcase(virtual, pattern.replace("**/", "")) or fnmatchcase(virtual, pattern) for pattern in patterns):
-                continue
-            if resolved in seen:
-                continue
+            if resolved in seen or not resolved.is_file() or not any(resolved.is_relative_to(root) for root in ROOTS):
+                continue  # a symlink or a ../ in a pattern must not lead out of buia/ and vault/
             seen.add(resolved)
             files.append(resolved)
     for f in files:
