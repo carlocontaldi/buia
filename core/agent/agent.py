@@ -38,7 +38,20 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
 DATA = Path(os.getenv("DATA_DIR", "/data")).resolve()
 ROOTS = [(DATA / "buia").resolve(), (DATA / "vault").resolve()]
-MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md").split(",") if p.strip()]
+
+
+def memory_patterns(raw: str | None) -> list[str]:
+    default = "buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md,buia/memory/Projects/*.md"
+    patterns = [p.strip() for p in (raw if raw is not None else default).split(",") if p.strip()]
+    project_patterns = {"buia/memory/projects/*.md", "buia/memory/Projects/*.md"}
+    if project_patterns & set(patterns):
+        for pattern in ("buia/memory/projects/*.md", "buia/memory/Projects/*.md"):
+            if pattern not in patterns:
+                patterns.append(pattern)
+    return patterns
+
+
+MEMORY_FILES = memory_patterns(os.getenv("MEMORY_FILES"))
 try:
     VERSION = (Path(__file__).with_name("VERSION")).read_text(encoding="utf-8").strip()  # the release number, also the git tag (v0.1.0)
 except OSError:
@@ -800,7 +813,18 @@ def system_prompt() -> str:
     # date only: a changing clock in the prompt prefix would defeat llama-server's prompt cache
     parts = [BASE_PROMPT.format(today=datetime.now(TZ).strftime("%A %Y-%m-%d")) + (WEB_PROMPT if WEB else "")]
     budget = MEMORY_MAX_CHARS
-    files = [f for pattern in MEMORY_FILES for f in sorted(DATA.glob(pattern)) if f.is_file()]
+    files = []
+    seen = set()
+    for pattern in MEMORY_FILES:
+        for f in sorted(DATA.glob(pattern)):
+            try:
+                resolved = f.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if not f.is_file() or resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append(f)
     for f in files:
         if budget <= 0:
             break

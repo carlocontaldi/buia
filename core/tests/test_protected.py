@@ -24,7 +24,12 @@ os.environ.update(DATA_DIR=DATA, BUIA_PASSWORD="test")
 AGENT_DIR = Path(__file__).resolve().parents[1] / "agent"
 if AGENT_DIR.is_dir():
     sys.path.insert(0, str(AGENT_DIR))
-import agent  # noqa: E402
+_memory_files = os.environ.pop("MEMORY_FILES", None)
+try:
+    import agent  # noqa: E402
+finally:
+    if _memory_files is not None:
+        os.environ["MEMORY_FILES"] = _memory_files
 
 
 class ProtectedTests(unittest.TestCase):
@@ -83,13 +88,76 @@ class VersionTests(unittest.TestCase):
 
 class MemoryFilesTests(unittest.TestCase):
     def test_the_defaults_name_buia(self):
-        self.assertEqual(agent.MEMORY_FILES, ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/Projects/*.md"])
+        self.assertEqual(agent.MEMORY_FILES, ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/projects/*.md", "buia/memory/Projects/*.md"])
+
+    def test_legacy_memory_setting_also_loads_the_lowercase_project_folder(self):
+        self.assertEqual(
+            agent.memory_patterns("buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md"),
+            ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/Projects/*.md", "buia/memory/projects/*.md"],
+        )
 
     def test_the_write_guard_covers_the_memory_files_only(self):
         (agent.DATA / "buia").mkdir(exist_ok=True)
         with unittest.mock.patch.object(agent, "MEMORY_FILES", ["buia/BUIA.md"]):
             self.assertTrue(agent.is_memory_file("buia/BUIA.md"))
             self.assertFalse(agent.is_memory_file("buia/other.md"))
+
+    def test_shipped_project_memory_paths_use_the_lowercase_folder(self):
+        repo = AGENT_DIR.parent.parent
+        env_example = (repo / "core" / ".env.example").read_text(encoding="utf-8")
+        compose = (repo / "core" / "docker-compose.yml").read_text(encoding="utf-8")
+        template = (repo / "templates" / "BUIA.md").read_text(encoding="utf-8")
+        self.assertIn("buia/memory/projects/*.md", env_example)
+        self.assertIn("buia/memory/Projects/*.md", env_example)
+        self.assertIn("buia/memory/projects/*.md", compose)
+        self.assertIn("buia/memory/Projects/*.md", compose)
+        self.assertIn("memory/projects/", template)
+
+    def test_system_prompt_loads_new_and_legacy_project_memory(self):
+        with tempfile.TemporaryDirectory() as data:
+            root = Path(data)
+            lower = root / "lower.md"
+            upper = root / "upper.md"
+            lower.write_text("lowercase memory", encoding="utf-8")
+            upper.write_text("legacy memory", encoding="utf-8")
+
+            def glob_files(self, pattern):
+                if pattern == "buia/memory/projects/*.md":
+                    return [lower]
+                if pattern == "buia/memory/Projects/*.md":
+                    return [upper]
+                return []
+
+            with unittest.mock.patch.object(agent, "DATA", root), \
+                    unittest.mock.patch.object(agent, "MEMORY_FILES", [
+                        "buia/memory/projects/*.md",
+                        "buia/memory/Projects/*.md",
+                    ]), \
+                    unittest.mock.patch.object(agent.Path, "glob", glob_files):
+                prompt = agent.system_prompt()
+        self.assertIn("lowercase memory", prompt)
+        self.assertIn("legacy memory", prompt)
+
+    def test_system_prompt_deduplicates_case_alias_memory_files(self):
+        with tempfile.TemporaryDirectory() as data:
+            root = Path(data)
+            shared = root / "shared.md"
+            shared.write_text("shared memory", encoding="utf-8")
+
+            def glob_files(self, pattern):
+                return [shared] if pattern in (
+                    "buia/memory/projects/*.md",
+                    "buia/memory/Projects/*.md",
+                ) else []
+
+            with unittest.mock.patch.object(agent, "DATA", root), \
+                    unittest.mock.patch.object(agent, "MEMORY_FILES", [
+                        "buia/memory/projects/*.md",
+                        "buia/memory/Projects/*.md",
+                    ]), \
+                    unittest.mock.patch.object(agent.Path, "glob", glob_files):
+                prompt = agent.system_prompt()
+        self.assertEqual(prompt.count("shared memory"), 1)
 
 
 if __name__ == "__main__":

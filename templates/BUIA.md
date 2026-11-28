@@ -64,7 +64,7 @@ Priority order matters. When rules conflict, follow the higher priority item: Co
 ## Where things are
 - buia/ is this folder (read/write); open it in Obsidian to edit my notes.
 - memory/ holds my notes. Map (edit me):
-  - memory/Projects/  active projects, one note each
+  - memory/projects/  active projects, one note each
   - memory/MEMORY.md  like Claude's MEMORY.md
 
 ## Memory
