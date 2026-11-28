@@ -468,7 +468,7 @@ VIDEO_MAX_SIDE, VIDEO_MAX_FRAMES, VIDEO_MAX_STEPS = 512, 33, 20
 IMAGE_MAX_SIDE = 768  # not measured yet: raise only after measuring
 VIDEO_TIMEOUT = 900  # seconds to wait for one job
 POLL_LOST = 30  # seconds a server may stay silent (restart, hiccup) before a job is given up; one failed poll must not end a job that still runs
-# CogVideoX-2b (cogvideo service, chosen in the Models panel) has one fixed format; these must equal cogvideo/server.py. Steps: 50 is the model card's value.
+# CogVideoX-2b (cogvideo service, chosen in the Settings panel) has one fixed format; these must equal cogvideo/server.py. Steps: 50 is the model card's value.
 # Not measured on the 8 GB laptop: the timeout is a generous guess, lower the default steps if jobs take too long.
 COG_FORMAT, COG_STEPS, COG_DEFAULT_STEPS, COG_TIMEOUT = (720, 480, 49), (10, 50), 50, 3600
 GENERATED = DATA / "buia" / "generated"  # images and videos made by the tools
@@ -1216,7 +1216,7 @@ def delete_chat(cid: str):
 
 
 class VideoAsk(BaseModel):
-    model: str = ""  # a video preset id from the Models panel; empty = whatever the video server runs now
+    model: str = ""  # a video preset id from the Settings panel; empty = whatever the video server runs now
     values: dict     # the form: prompt, negative_prompt and the fields of videogen.fields for that engine
 
 

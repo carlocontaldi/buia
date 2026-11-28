@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs sd-server and restarts it when the "active model" file changes. sd-server loads one model at start and cannot switch,
-# so the Models panel (agent/sdmodels.py) writes the flags of the model you picked to that file and this script does the restart.
+# so the Settings panel (agent/sdmodels.py) writes the flags of the model you picked to that file and this script does the restart.
 # usage: sd-run.sh <active-file> [default flags...]   (docker-compose.yml passes SD_ARGS / SD_VIDEO_ARGS from .env as the defaults)
 # The file wins when it exists and is not empty; delete it to go back to the defaults. With neither, it waits for a model to be picked.
 # It also waits while a model file the flags name (an absolute path ending in .gguf or .safetensors) is not on disk yet, and starts the server
@@ -59,7 +59,7 @@ while :; do
   elif [ $# -gt 0 ]; then
     start "the default flags (SD_ARGS in .env)" "$@" || { sleep 2; continue; }
   else
-    sleep 2   # nothing to run yet: pick a model in the Models panel
+    sleep 2   # nothing to run yet: pick a model in the Settings panel
     continue
   fi
   while kill -0 "$pid" 2>/dev/null; do
