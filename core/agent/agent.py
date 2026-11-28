@@ -97,7 +97,7 @@ def protected(p: Path) -> bool:
     """True for everything inside a protected top-level folder of either root:
     - .obsidian: plugins/ and community-plugins.json there are code that Obsidian runs on your PC;
     - any clone of this repo, whatever it is called: it holds .env (HF token) and the scripts you run. A clone is recognised by
-      its install.ps1 and docker-compose.yml, so a renamed folder is still covered;
+      its setup.ps1 and docker-compose.yml, so a renamed folder is still covered;
     - .git, templates/ and README.md at the top of buia/ (REPO_ENTRIES): buia/ is the repo root, so they are the repo's. So is .vault/,
       the default vault folder, which is read-only as vault/ and must not be writable here.
     A Windows bind mount treats .OBSIDIAN and .obsidian (or MEMORY and memory) as one folder while resolve() does not,
@@ -107,7 +107,7 @@ def protected(p: Path) -> bool:
             parts = p.relative_to(r).parts
             if parts:
                 top = r / parts[0]
-                if parts[0].casefold() == ".obsidian" or ((top / "install.ps1").exists() and (top / "docker-compose.yml").exists()):
+                if parts[0].casefold() == ".obsidian" or ((top / "setup.ps1").exists() and (top / "docker-compose.yml").exists()):
                     return True
                 if r == ROOTS[0] and parts[0].casefold() in REPO_ENTRIES:
                     return True

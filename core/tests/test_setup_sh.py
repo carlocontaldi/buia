@@ -1,4 +1,4 @@
-"""Tests for ../setup.sh, the Linux installer and updater in one file. It runs the real script in a copy of the repository layout, with stand-ins
+"""Tests for ../setup.sh, the Linux script that installs and updates. It runs the real script in a copy of the repository layout, with stand-ins
 for docker, git, curl, nvidia-smi and tailscale that only write down how they were called, so nothing is installed, pulled or started.
 They need bash and GNU sed/find (Linux).
 
@@ -222,6 +222,17 @@ class SetupShTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("sudo chown -R", r.stderr)
 
+    def test_a_snap_docker_gets_a_warning(self):
+        snap = self.tmp / "snap" / "bin"
+        snap.mkdir(parents=True)
+        shutil.copy(self.bin / "docker", snap / "docker")
+        env = {k: v for k, v in os.environ.items() if k != "LLAMA_IMAGE"}
+        env.update({"PATH": f"{snap}{os.pathsep}{self.bin}{os.pathsep}{os.environ['PATH']}", "FAKE_LOG": str(self.log)})
+        r = subprocess.run(["bash", str(self.repo / "setup.sh")], env=env, cwd=self.tmp, text=True, capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("comes from a snap", r.stderr)
+        self.assertNotIn("comes from a snap", self.run_setup().stderr)
+
     def test_tailscale_and_llama_options(self):
         r = self.run_setup("--tailscale", "--llama")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -240,10 +251,11 @@ class SetupShTests(unittest.TestCase):
 
     def test_values_that_must_match_other_files(self):
         script = (REPO / "setup.sh").read_text(encoding="utf-8")
-        ps1 = (CORE / "install.ps1").read_text(encoding="utf-8")
+        ps1 = (CORE / "setup.ps1").read_text(encoding="utf-8")
         compose = (CORE / "docker-compose.yml").read_text(encoding="utf-8")
         self.assertEqual(re.search(r"(?m)^SD_TAG=(\S+)", script).group(1), re.search(r'\$SdTag = "([^"]+)"', ps1).group(1))
         llama = re.search(r"(?m)^LLAMA_DEFAULT=(\S+)", script).group(1)
+        self.assertEqual(llama, re.search(r'\$LlamaDefault = "([^"]+)"', ps1).group(1))
         self.assertIn("${LLAMA_IMAGE:-" + llama + "@sha256:", compose)
 
     def test_the_script_is_stored_executable(self):

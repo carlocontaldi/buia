@@ -30,7 +30,7 @@ import agent  # noqa: E402
 class ProtectedTests(unittest.TestCase):
     def setUp(self):
         self.made = []
-        for name in ("buia/stack/install.ps1", "buia/stack/docker-compose.yml", "buia/notes/README.md", "buia/templates.md",
+        for name in ("buia/stack/setup.ps1", "buia/stack/docker-compose.yml", "buia/notes/README.md", "buia/templates.md",
                      "vault/README.md", "vault/templates/daily.md"):
             f = agent.DATA / name
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -55,7 +55,7 @@ class ProtectedTests(unittest.TestCase):
             self.refused(rel)
 
     def test_the_stack_folder_and_obsidian_stay_refused(self):
-        for rel in ("buia/stack/.env", "buia/stack/install.ps1", "buia/.obsidian/app.json", "vault/.obsidian/app.json"):
+        for rel in ("buia/stack/.env", "buia/stack/setup.ps1", "buia/.obsidian/app.json", "vault/.obsidian/app.json"):
             self.refused(rel)
 
     def test_the_default_vault_folder_is_refused_in_buia_but_not_as_vault(self):

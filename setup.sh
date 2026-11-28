@@ -7,13 +7,13 @@
 #   --llama       also show the digest of the newest llama.cpp server image (docker-compose.yml pins one; README > Update)
 #   --no-pull     update without git pull (you have local commits, or this is not a git clone)
 # An existing .env or BUIA.md is never overwritten. Run it as your normal user, not with sudo: it needs the docker group, not root.
-# Windows has install.cmd and update.cmd for the same two jobs.
+# Windows has setup.cmd (core/setup.ps1): the same one script for the same two jobs.
 
 set -eu
 set -o pipefail
 
-SD_TAG=master-920-2f88688                                       # stable-diffusion.cpp release the sd service is built from (keep equal to $SdTag in core/install.ps1)
-LLAMA_DEFAULT=ghcr.io/ggml-org/llama.cpp:server-cuda13         # keep equal to the tag in core/docker-compose.yml
+SD_TAG=master-920-2f88688                                       # stable-diffusion.cpp release the sd service is built from (keep equal to $SdTag in core/setup.ps1)
+LLAMA_DEFAULT=ghcr.io/ggml-org/llama.cpp:server-cuda13         # keep equal to the tag in core/docker-compose.yml and to $LlamaDefault in core/setup.ps1
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -64,6 +64,9 @@ main() {
 
   # 3. Docker must work for this user
   command -v docker >/dev/null 2>&1 || die "Docker is not installed. Install Docker Engine: https://docs.docker.com/engine/install/"
+  case $(command -v docker) in
+    */snap/bin/*) warn "This Docker comes from a snap, which confines it: GPU access and folders outside your home often fail. Install Docker Engine from docker.com, or the docker.io package, instead." ;;
+  esac
   docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is missing (docker compose version fails). Install docker-compose-plugin, or Docker Engine from docker.com."
   if ! out=$(docker info --format '{{.ServerVersion}}' 2>&1); then
     case $out in
