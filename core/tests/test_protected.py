@@ -88,13 +88,7 @@ class VersionTests(unittest.TestCase):
 
 class MemoryFilesTests(unittest.TestCase):
     def test_the_defaults_name_buia(self):
-        self.assertEqual(agent.MEMORY_FILES, ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/projects/*.md", "buia/memory/Projects/*.md"])
-
-    def test_legacy_memory_setting_also_loads_the_lowercase_project_folder(self):
-        self.assertEqual(
-            agent.memory_patterns("buia/BUIA.md,buia/memory/*.md,buia/memory/Projects/*.md"),
-            ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/Projects/*.md", "buia/memory/projects/*.md"],
-        )
+        self.assertEqual(agent.MEMORY_FILES, ["buia/BUIA.md", "buia/memory/*.md", "buia/memory/projects/*.md"])
 
     def test_the_write_guard_covers_the_memory_files_only(self):
         (agent.DATA / "buia").mkdir(exist_ok=True)
@@ -108,10 +102,10 @@ class MemoryFilesTests(unittest.TestCase):
         compose = (repo / "core" / "docker-compose.yml").read_text(encoding="utf-8")
         template = (repo / "templates" / "BUIA.md").read_text(encoding="utf-8")
         self.assertIn("buia/memory/projects/*.md", env_example)
-        self.assertIn("buia/memory/Projects/*.md", env_example)
         self.assertIn("buia/memory/projects/*.md", compose)
-        self.assertIn("buia/memory/Projects/*.md", compose)
         self.assertIn("memory/projects/", template)
+        for text in (env_example, compose, template):  # one spelling everywhere: the loader and the write guard ignore case
+            self.assertNotIn("Projects", text)
 
     def prompt_for(self, files, patterns):
         """system_prompt() over a temporary DATA with the given {path: text} files, loading `patterns`."""

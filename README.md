@@ -106,7 +106,7 @@ Use `serve`, never `funnel`: the agent has one shared password only and can writ
 ## Settings
 
 All settings are in `.env` (each is documented in `.env.example`). Common ones: `CTX_SIZE`, `KV_CACHE_TYPE`,
-`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/projects/*.md`, plus the legacy `buia/memory/Projects/*.md`), `GPU_VRAM_MB` (only if Settings cannot read the GPU),
+`MEMORY_FILES` (`.md` files loaded on every request; default `buia/BUIA.md`, `buia/memory/*.md`, `buia/memory/projects/*.md`), `GPU_VRAM_MB` (only if Settings cannot read the GPU),
 `ALLOWED_HOSTS` (extra host names for the web UI, see Security), `BUIA_PASSWORD` (the web UI password), `WEB_ACCESS` (`on` by default, see Web access).
 
 ## Troubleshooting

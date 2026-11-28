@@ -59,7 +59,7 @@ services:
       KV_CACHE_TYPE: ${KV_CACHE_TYPE:-q8_0}
       HF_TOKEN: ${HF_TOKEN:-}
       GPU_VRAM_MB: ${GPU_VRAM_MB:-}    # optional manual VRAM size if nvidia-smi is not visible in this container
-      MEMORY_FILES: ${MEMORY_FILES:-buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md,buia/memory/Projects/*.md}
+      MEMORY_FILES: ${MEMORY_FILES:-buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md}
       MEMORY_MAX_CHARS: ${MEMORY_MAX_CHARS:-12000}   # size of the always-loaded memory (agent/agent.py)
       MAX_STEPS: ${MAX_STEPS:-8}                   # tool-call rounds per user message
       MAX_HISTORY: ${MAX_HISTORY:-20}               # chat messages sent to the model per request

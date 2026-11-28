@@ -39,20 +39,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama:8080")
 DATA = Path(os.getenv("DATA_DIR", "/data")).resolve()
 ROOTS = [(DATA / "buia").resolve(), (DATA / "vault").resolve()]
-
-
-def memory_patterns(raw: str | None) -> list[str]:
-    default = "buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md,buia/memory/Projects/*.md"
-    patterns = [p.strip() for p in (raw if raw is not None else default).split(",") if p.strip()]
-    project_patterns = {"buia/memory/projects/*.md", "buia/memory/Projects/*.md"}
-    if project_patterns & set(patterns):
-        for pattern in ("buia/memory/projects/*.md", "buia/memory/Projects/*.md"):
-            if pattern not in patterns:
-                patterns.append(pattern)
-    return patterns
-
-
-MEMORY_FILES = memory_patterns(os.getenv("MEMORY_FILES"))
+MEMORY_FILES = [p.strip() for p in os.getenv("MEMORY_FILES", "buia/BUIA.md,buia/memory/*.md,buia/memory/projects/*.md").split(",") if p.strip()]
 try:
     VERSION = (Path(__file__).with_name("VERSION")).read_text(encoding="utf-8").strip()  # the release number, also the git tag (v0.1.0)
 except OSError:
