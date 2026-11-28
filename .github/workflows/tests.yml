@@ -100,4 +100,4 @@ jobs:
           rm ../.agent-write-test
       - name: Show the agent log
         if: failure()
-        run: docker compose logs agent
+        run: docker compose -f docker-compose.yml -f "$RUNNER_TEMP/no-gpu.yml" logs agent

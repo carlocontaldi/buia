@@ -3,7 +3,7 @@ name: release
 # Publishes a GitHub release when a tag like v0.1.0 is pushed. To make one:
 #   1. Set core/agent/VERSION and write release-notes/v<version>.md, then commit and push to main.
 #   2. Once the tests are green on main:  git tag -a v<version> -m "buia <version>"  and  git push origin v<version>
-# The run stops before publishing if the tag differs from VERSION, the notes file is missing or any test fails.
+# The run stops before publishing if the tag differs from VERSION, the notes file is missing, the tagged commit is not on main or any test fails.
 
 on:
   push:
